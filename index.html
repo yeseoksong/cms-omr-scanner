@@ -1,0 +1,1321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>CMS 평촌 · 직통 실시간 OMR 스캐너</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js" defer></script>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --surface: #111827;
+      --card: #1e293b;
+      --line: rgba(148, 163, 184, 0.22);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --blue: #2563eb;
+      --emerald: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --violet: #7c3aed;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    }
+    .app-shell {
+      min-height: 100dvh; display: flex; flex-direction: column;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    /* Top Header */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+      padding: 10px 14px; background: rgba(15, 23, 42, 0.94); border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; z-index: 30; backdrop-filter: blur(10px);
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: 14.5px; letter-spacing: -0.02em; }
+    .pill {
+      font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px;
+      background: rgba(56, 189, 248, 0.16); color: #7dd3fc; border: 1px solid rgba(125, 211, 252, 0.3);
+    }
+    .pill.ok { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; border-color: rgba(110, 231, 183, 0.35); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      border: 1px solid var(--line); background: rgba(255,255,255,0.08); color: #fff;
+      padding: 8px 13px; border-radius: 10px; font-size: 12.5px; font-weight: 800;
+      cursor: pointer; transition: all 0.13s ease; white-space: nowrap;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn.pri { background: var(--blue); border-color: #60a5fa; }
+    .btn.em { background: #059669; border-color: #34d399; }
+    .btn.red { background: #dc2626; border-color: #f87171; }
+    .btn.sm { padding: 5px 10px; font-size: 11.5px; border-radius: 8px; }
+
+    /* CMS Signature HUD Card */
+    @keyframes cmsHudSpin { to { transform: rotate(360deg); } }
+    .cms-hud-ring { width: 20px; height: 20px; animation: cmsHudSpin 0.84s linear infinite; flex-shrink: 0; }
+    .cms-hud-wrap {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 28px 16px; gap: 12px;
+    }
+    .cms-hud-card {
+      width: 100%; max-width: 440px; padding: 14px 16px; border-radius: 14px;
+      background: #1e293b; border: 1px solid rgba(148, 163, 184, 0.25);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+    }
+    .cms-hud-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .cms-hud-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .cms-hud-badge {
+      font-size: 10.5px; font-weight: 800; padding: 2px 8px; border-radius: 999px;
+      background: rgba(56, 189, 248, 0.18); color: #38bdf8; flex-shrink: 0;
+    }
+    .cms-hud-title { font-size: 13px; font-weight: 800; color: #f8fafc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cms-hud-pct { font-size: 12px; font-weight: 900; color: #38bdf8; }
+    .cms-hud-track { height: 6px; border-radius: 99px; background: rgba(255,255,255,0.1); overflow: hidden; }
+    .cms-hud-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #38bdf8, #10b981); transition: width 0.2s ease; }
+
+    /* Top Toast HUD */
+    .top-toast {
+      position: fixed; left: 50%; top: 14px; transform: translate(-50%, -18px);
+      z-index: 999; min-width: 240px; max-width: 92vw;
+      background: rgba(15, 23, 42, 0.96); color: #fff; border: 1px solid rgba(148,163,184,0.35);
+      border-radius: 12px; padding: 10px 14px; box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+      display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800;
+      opacity: 0; pointer-events: none; transition: all 0.18s ease;
+    }
+    .top-toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+    .top-toast.ok { border-color: rgba(52, 211, 153, 0.65); }
+    .top-toast.warn { border-color: rgba(251, 191, 36, 0.7); }
+
+    /* Main Split Layout (iPad/Galaxy Tab Landscape + Portrait Phone) */
+    .main-grid {
+      flex: 1; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+      gap: 12px; padding: 12px; align-items: start;
+    }
+    @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 14px; padding: 12px; overflow: hidden;
+    }
+
+    /* Camera Stage */
+    .cam-stage {
+      position: relative; width: 100%; aspect-ratio: 4 / 3;
+      min-height: 290px; max-height: 66dvh;
+      background: #020617; border-radius: 12px; overflow: hidden;
+      border: 2px solid rgba(56, 189, 248, 0.35);
+    }
+    .cam-stage video { width: 100%; height: 100%; object-fit: contain; display: block; background: #020617; }
+    .cam-stage canvas.cam-ov { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+    .cam-hud {
+      position: absolute; left: 10px; right: 10px; top: 10px; z-index: 6;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; pointer-events: none;
+    }
+    .cam-pill {
+      padding: 5px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 800;
+      background: rgba(15, 23, 42, 0.84); color: #f8fafc; border: 1px solid rgba(255,255,255,0.2);
+      backdrop-filter: blur(6px);
+    }
+    .cam-pill.ok { background: rgba(5, 150, 105, 0.92); border-color: #6ee7b7; }
+    .cam-pill.warn { background: rgba(217, 119, 6, 0.92); }
+    .cam-pill.err { background: rgba(220, 38, 38, 0.92); }
+
+    .cam-start-cover {
+      position: absolute; inset: 0; z-index: 5;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 20px; text-align: center; gap: 11px;
+      background: radial-gradient(circle at 50% 30%, rgba(37, 99, 235, 0.35), rgba(2, 6, 23, 0.95));
+    }
+    .cam-start-cover.hidden { display: none; }
+
+    .cam-live-bar {
+      position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 7;
+      display: none; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;
+    }
+    .cam-live-bar.show { display: flex; }
+    .cam-fab {
+      border: 1px solid rgba(255,255,255,0.28); border-radius: 999px;
+      padding: 10px 16px; font-size: 13px; font-weight: 800; color: #fff;
+      background: rgba(15, 23, 42, 0.86); backdrop-filter: blur(8px); cursor: pointer;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    }
+    .cam-fab.snap { background: #10b981; border-color: #6ee7b7; }
+    .cam-fab.torch-on { background: #d97706; border-color: #fde68a; }
+    .cam-fab.stop { background: rgba(220, 38, 38, 0.92); }
+
+    .cam-banner {
+      position: absolute; left: 12px; right: 12px; bottom: 62px; z-index: 8;
+      padding: 11px 14px; border-radius: 12px;
+      background: rgba(5, 150, 105, 0.95); color: #fff;
+      font-size: 13.5px; font-weight: 900; display: none;
+      align-items: center; justify-content: space-between; gap: 10px;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.45);
+    }
+    .cam-banner.show { display: flex; }
+
+    .cam-opts {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+      margin-top: 10px; font-size: 12px; font-weight: 700; color: #cbd5e1;
+    }
+    .sel, .inp {
+      height: 32px; padding: 0 9px; border-radius: 8px;
+      border: 1px solid var(--line); background: #0f172a; color: #f8fafc;
+      font-size: 12px; font-weight: 700;
+    }
+    .rng-inp {
+      width: 52px; height: 28px; text-align: center; padding: 0 4px;
+      border-radius: 7px; border: 1px solid rgba(167,139,250,0.55); background: #0f172a; color: #fff;
+      font-size: 12px; font-weight: 800;
+    }
+
+    /* Queue & Inspector */
+    .q-list { display: flex; flex-direction: column; gap: 7px; max-height: 240px; overflow-y: auto; }
+    .q-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 9px 11px; border-radius: 10px; cursor: pointer;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--line);
+    }
+    .q-item.sel { background: rgba(37, 99, 235, 0.22); border-color: #60a5fa; }
+    .q-item.saved { border-left: 4px solid var(--emerald); }
+    .q-item.unsaved { border-left: 4px solid var(--amber); }
+
+    .ans-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+      gap: 6px; max-height: 320px; overflow-y: auto; margin-top: 8px;
+    }
+    .ans-row {
+      display: flex; align-items: center; gap: 4px; padding: 5px 7px;
+      border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid var(--line);
+    }
+    .ans-row.ok { background: rgba(16,185,129,0.14); border-color: rgba(52,211,153,0.45); }
+    .ans-row.bad { background: rgba(239,68,68,0.14); border-color: rgba(248,113,113,0.45); }
+    .ans-no { font-size: 11.5px; font-weight: 800; color: #94a3b8; width: 24px; text-align: right; }
+    .bub {
+      width: 22px; height: 22px; border-radius: 999px; border: 1.5px solid #475569;
+      background: #0f172a; color: #cbd5e1; font-size: 10.5px; font-weight: 800;
+      display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+    }
+    .bub.ans-hint { border-color: #34d399; color: #6ee7b7; }
+    .bub.picked.ok { background: #10b981; border-color: #10b981; color: #fff; }
+    .bub.picked.bad { background: #ef4444; border-color: #ef4444; color: #fff; }
+  </style>
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <span>📷 CMS 직통 실시간 OMR 스캐너</span>
+      <span id="seasonBadge" class="pill">iframe 없음 · 전 기기 지원</span>
+      <span id="syncBadge" class="pill ok" style="display:none;">출석부 실시간 연동</span>
+    </div>
+    <div style="display:flex; gap:6px; align-items:center;">
+      <button type="button" class="btn sm" onclick="reloadBootData_(true)">↻ 명단 새로고침</button>
+      <button type="button" class="btn sm" onclick="window.close()">닫기</button>
+    </div>
+  </header>
+
+  <div id="appBody" class="cms-hud-wrap">
+    <div class="cms-hud-card">
+      <div class="cms-hud-top">
+        <div class="cms-hud-left">
+          <svg class="cms-hud-ring" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#38bdf8" stroke-width="3" stroke-linecap="round" stroke-dasharray="22 57"/><circle cx="12" cy="12" r="9" stroke="#06b6d4" stroke-width="3" stroke-linecap="round" stroke-dasharray="10 57" stroke-dashoffset="-14"/><circle cx="12" cy="12" r="9" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-dasharray="19 57" stroke-dashoffset="-20"/></svg>
+          <span class="cms-hud-badge">연결 중</span>
+          <span class="cms-hud-title">CMS 내신교재 정답 DB · 학생 명단 연결 중...</span>
+        </div>
+        <span class="cms-hud-pct" id="bootPct">18%</span>
+      </div>
+      <div class="cms-hud-track"><div class="cms-hud-fill" id="bootFill" style="width:18%;"></div></div>
+    </div>
+  </div>
+</div>
+
+<div id="topToast" class="top-toast"><span id="topToastMsg"></span></div>
+
+<script>
+(function() {
+  "use strict";
+
+  const S = {
+    apiUrl: "",
+    tok: "",
+    teacher: "직통OMR스캐너",
+    seasonCode: "2026_2_FINAL",
+    seasonName: "",
+    students: [],
+    sections: [],
+    itemsBySec: {},
+    results: [],
+    selStudentId: "",
+    selSecKey: "2s_m_1",
+    rangeFrom: 1,
+    rangeTo: 24,
+    camRunning: false,
+    camFacing: "environment",
+    torchOn: false,
+    autoSave: true,
+    soundOn: true,
+    queue: [],
+    activeId: ""
+  };
+
+  let STREAM = null, RAF = null, LAST_TICK = 0;
+  let STABLE_CORNERS = null, STABLE_CNT = 0, NO_CORNER_FRAMES = 0;
+  let LAST_SIG = "", LAST_SIG_AT = 0;
+  let AUDIO_CTX = null;
+
+  const OMR_W = 800, OMR_H = 1120;
+  const OMR_CORNERS_STD = [
+    { x: 46, y: 46 }, { x: 754, y: 46 }, { x: 46, y: 1074 }, { x: 754, y: 1074 }
+  ];
+  const OMR_RANGE_COL_X = [84, 430];
+  const OMR_COL_X = [
+    [158, 206, 254, 302, 350],
+    [514, 562, 610, 658, 706]
+  ];
+
+  function esc_(s) {
+    return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+
+  let toastTm_ = null;
+  function showTopToast_(msg, kind) {
+    const el = document.getElementById("topToast");
+    const m = document.getElementById("topToastMsg");
+    if (!el || !m) return;
+    m.textContent = String(msg || "");
+    el.className = "top-toast show " + (kind === "ok" ? "ok" : (kind === "warn" ? "warn" : ""));
+    clearTimeout(toastTm_);
+    toastTm_ = setTimeout(function() { el.classList.remove("show"); }, kind === "warn" ? 5000 : 3200);
+  }
+
+  function beep_(type) {
+    if (!S.soundOn) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!AUDIO_CTX) AUDIO_CTX = new AC();
+      if (AUDIO_CTX.state === "suspended") AUDIO_CTX.resume();
+      const now = AUDIO_CTX.currentTime;
+      const tone = function(freq, st, dur) {
+        const osc = AUDIO_CTX.createOscillator();
+        const g = AUDIO_CTX.createGain();
+        osc.type = type === "warn" ? "triangle" : "sine";
+        osc.frequency.setValueAtTime(freq, now + st);
+        g.gain.setValueAtTime(0.16, now + st);
+        g.gain.exponentialRampToValueAtTime(0.001, now + st + dur);
+        osc.connect(g); g.connect(AUDIO_CTX.destination);
+        osc.start(now + st); osc.stop(now + st + dur);
+      };
+      if (type === "ok") { tone(1046.5, 0, 0.08); tone(1568, 0.08, 0.14); }
+      else { tone(600, 0, 0.1); tone(440, 0.11, 0.15); }
+    } catch (_) {}
+  }
+
+  function getOmrGridSpec_(count) {
+    const is50 = count > 30;
+    return { is50: is50, perCol: is50 ? 25 : 15, startY: is50 ? 248 : 268, stepY: is50 ? 32 : 50, radius: is50 ? 11.5 : 15 };
+  }
+
+  function getSecMeta_(k) {
+    return S.sections.find(function(x) { return x.key === k; }) || { key: k, shortLbl: k, title: k, count: 20 };
+  }
+  function getStu_(id) {
+    return S.students.find(function(x) { return x.erpId === id; }) || null;
+  }
+
+  function normAns_(raw, qType) {
+    const s = String(raw == null ? "" : raw).trim().toUpperCase();
+    if (!s) return "";
+    if (qType === "subj") {
+      if (s === "O" || s === "○" || s === "1") return "O";
+      if (s === "△" || s === "▲" || s === "2") return "△";
+      if (s === "X" || s === "✕" || s === "3" || s === "0") return "X";
+      return s;
+    }
+    if (s === "X" || s === "✕" || s === "미풀이" || s === "오답") return "X";
+    const digits = s.match(/[1-5]/g);
+    if (!digits || !digits.length) return "";
+    const uniq = [];
+    digits.forEach(function(d) { if (uniq.indexOf(d) === -1) uniq.push(d); });
+    uniq.sort();
+    return uniq.join(",");
+  }
+
+  function gradeLocal_(secKey, amap, fromNo, toNo) {
+    const items = S.itemsBySec[secKey] || [];
+    let rangeCount = 0, solved = 0, correct = 0, wrong = 0;
+    const perItem = [];
+    items.forEach(function(it) {
+      if (fromNo && toNo && (it.n < fromNo || it.n > toNo)) return;
+      rangeCount++;
+      const stu = normAns_((amap || {})[String(it.n)], it.t);
+      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, stu: "", status: "blank" }); return; }
+      solved++;
+      const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
+      if (isOk) correct++; else wrong++;
+      perItem.push({ n: it.n, t: it.t, cor: it.a, stu: stu, status: isOk ? "ok" : "bad" });
+    });
+    const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
+    return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
+  }
+
+  function filterAnsToRange_(amap, f, t) {
+    const out = {};
+    Object.keys(amap || {}).forEach(function(k) {
+      const n = Number(k);
+      if (n >= f && n <= t && amap[k]) out[String(n)] = amap[k];
+    });
+    return out;
+  }
+
+  // ===== 3-Pass Corner Detector + 360° Homography + [□ 구간] & Bubble Reader =====
+  function solveHomography_(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const sx = src[i].x, sy = src[i].y, dx = dst[i].x, dy = dst[i].y;
+      A.push([sx, sy, 1, 0, 0, 0, -dx * sx, -dx * sy]); b.push(dx);
+      A.push([0, 0, 0, sx, sy, 1, -dy * sx, -dy * sy]); b.push(dy);
+    }
+    for (let col = 0; col < 8; col++) {
+      let piv = col;
+      for (let r = col + 1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+      if (Math.abs(A[piv][col]) < 1e-10) return null;
+      const tA = A[col]; A[col] = A[piv]; A[piv] = tA;
+      const tB = b[col]; b[col] = b[piv]; b[piv] = tB;
+      const div = A[col][col];
+      for (let c = col; c < 8; c++) A[col][c] /= div;
+      b[col] /= div;
+      for (let r = 0; r < 8; r++) {
+        if (r === col) continue;
+        const f = A[r][col];
+        for (let c = col; c < 8; c++) A[r][c] -= f * A[col][c];
+        b[r] -= f * b[col];
+      }
+    }
+    return [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], 1];
+  }
+
+  function detectFourCornerMarkers_(imgData, w, h, diagOut) {
+    const n = w * h;
+    const gray = new Uint8Array(n);
+    const d = imgData.data;
+    const hist = new Int32Array(256);
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      const gv = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+      gray[i] = gv; hist[gv]++;
+    }
+    let cum = 0, p25 = 110;
+    for (let v = 0; v < 256; v++) { cum += hist[v]; if (cum >= n * 0.25) { p25 = v; break; } }
+
+    const integ = new Int32Array((w + 1) * (h + 1));
+    const iw = w + 1;
+    for (let y = 0; y < h; y++) {
+      let rowSum = 0;
+      const yOff = y * w, iCur = (y + 1) * iw, iPrev = y * iw;
+      for (let x = 0; x < w; x++) { rowSum += gray[yOff + x]; integ[iCur + x + 1] = integ[iPrev + x + 1] + rowSum; }
+    }
+
+    const rad = Math.max(14, Math.round(Math.min(w, h) / 10));
+    const bin = new Uint8Array(n);
+    const visited = new Uint8Array(n);
+    const qx = new Int32Array(n), qy = new Int32Array(n);
+    const minArea = Math.max(14, Math.floor(n * 0.00012));
+    const maxArea = Math.floor(n * 0.038);
+
+    function dist_(p, q) { return Math.hypot(p.x - q.x, p.y - q.y); }
+    function cross_(o, a, b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
+
+    function runPass_(maxG, ratioK, globalCut) {
+      for (let y = 0; y < h; y++) {
+        const y0 = Math.max(0, y - rad), y1 = Math.min(h - 1, y + rad), yOff = y * w;
+        for (let x = 0; x < w; x++) {
+          const x0 = Math.max(0, x - rad), x1 = Math.min(w - 1, x + rad);
+          const cnt = (x1 - x0 + 1) * (y1 - y0 + 1);
+          const sum = integ[(y1 + 1) * iw + (x1 + 1)] - integ[y0 * iw + (x1 + 1)] - integ[(y1 + 1) * iw + x0] + integ[y0 * iw + x0];
+          const g = gray[yOff + x];
+          bin[yOff + x] = globalCut > 0 ? (g < globalCut ? 1 : 0) : (g < maxG && g * cnt < sum * ratioK ? 1 : 0);
+        }
+      }
+      visited.fill(0);
+      const squares = [];
+      for (let y = 1; y < h - 1; y += 2) {
+        for (let x = 1; x < w - 1; x += 2) {
+          const idx0 = y * w + x;
+          if (!bin[idx0] || visited[idx0]) continue;
+          let head = 0, tail = 0;
+          qx[tail] = x; qy[tail] = y; tail++; visited[idx0] = 1;
+          let area = 0, sumX = 0, sumY = 0, minX = x, maxX = x, minY = y, maxY = y, aborted = false;
+          while (head < tail) {
+            const cx = qx[head], cy = qy[head]; head++;
+            area++; sumX += cx; sumY += cy;
+            if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+            if (area > maxArea) { aborted = true; break; }
+            if (cx > 0) { const ni = cy * w + cx - 1; if (bin[ni] && !visited[ni]) { visited[ni] = 1; qx[tail] = cx - 1; qy[tail] = cy; tail++; } }
+            if (cx + 1 < w) { const ni = cy * w + cx + 1; if (bin[ni] && !visited[ni]) { visited[ni] = 1; qx[tail] = cx + 1; qy[tail] = cy; tail++; } }
+            if (cy > 0) { const ni = (cy - 1) * w + cx; if (bin[ni] && !visited[ni]) { visited[ni] = 1; qx[tail] = cx; qy[tail] = cy - 1; tail++; } }
+            if (cy + 1 < h) { const ni = (cy + 1) * w + cx; if (bin[ni] && !visited[ni]) { visited[ni] = 1; qx[tail] = cx; qy[tail] = cy + 1; tail++; } }
+          }
+          if (aborted || area < minArea) continue;
+          const bw = maxX - minX + 1, bh = maxY - minY + 1;
+          if (bw < 4 || bh < 4) continue;
+          const aspect = bw / bh;
+          if (aspect < 0.45 || aspect > 2.2) continue;
+          const fill = area / (bw * bh);
+          if (fill < 0.52) continue;
+          const pad = Math.max(2, Math.round(Math.min(bw, bh) * 0.3));
+          let borderDark = 0, borderTot = 0;
+          const bx0 = minX - pad, bx1 = maxX + pad, by0 = minY - pad, by1 = maxY + pad;
+          const sxS = Math.max(0, bx0), sxE = Math.min(w - 1, bx1), syS = Math.max(0, by0), syE = Math.min(h - 1, by1);
+          if (by0 >= 0) for (let sx = sxS; sx <= sxE; sx += 2) { borderTot++; borderDark += bin[by0 * w + sx]; }
+          if (by1 < h) for (let sx = sxS; sx <= sxE; sx += 2) { borderTot++; borderDark += bin[by1 * w + sx]; }
+          if (bx0 >= 0) for (let sy = syS; sy <= syE; sy += 2) { borderTot++; borderDark += bin[sy * w + bx0]; }
+          if (bx1 < w) for (let sy = syS; sy <= syE; sy += 2) { borderTot++; borderDark += bin[sy * w + bx1]; }
+          if (borderTot > 0 && (borderDark / borderTot) > 0.62) continue;
+          squares.push({ x: sumX / area, y: sumY / area, area: area, size: Math.sqrt(area), sqScore: fill * (1 - Math.min(0.5, Math.abs(aspect - 1) * 0.5)) });
+        }
+      }
+      if (diagOut && (!diagOut.squares || squares.length > diagOut.squares.length)) diagOut.squares = squares.slice(0, 16);
+      if (squares.length < 4) return null;
+      squares.sort(function(a, b) { return (b.area * b.sqScore) - (a.area * a.sqScore); });
+      const cands = squares.slice(0, 36), m = cands.length;
+      let bestQuad = null, bestScore = -1;
+      for (let i = 0; i < m - 3; i++) {
+        for (let j = i + 1; j < m - 2; j++) {
+          if (Math.max(cands[i].size, cands[j].size) / Math.min(cands[i].size, cands[j].size) > 2.3) continue;
+          for (let k = j + 1; k < m - 1; k++) {
+            const sMin3 = Math.min(cands[i].size, cands[j].size, cands[k].size);
+            const sMax3 = Math.max(cands[i].size, cands[j].size, cands[k].size);
+            if (sMax3 / sMin3 > 2.3) continue;
+            for (let l = k + 1; l < m; l++) {
+              if (Math.max(sMax3, cands[l].size) / Math.min(sMin3, cands[l].size) > 2.35) continue;
+              const pts = [cands[i], cands[j], cands[k], cands[l]];
+              const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+              const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+              pts.sort(function(a, b) { return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx); });
+              const c0 = cross_(pts[0], pts[1], pts[2]), c1 = cross_(pts[1], pts[2], pts[3]);
+              const c2 = cross_(pts[2], pts[3], pts[0]), c3 = cross_(pts[3], pts[0], pts[1]);
+              if (!((c0 > 0 && c1 > 0 && c2 > 0 && c3 > 0) || (c0 < 0 && c1 < 0 && c2 < 0 && c3 < 0))) continue;
+              const tl = pts.reduce(function(a, b) { return (a.x + a.y) < (b.x + b.y) ? a : b; });
+              const br = pts.reduce(function(a, b) { return (a.x + a.y) > (b.x + b.y) ? a : b; });
+              const tr = pts.reduce(function(a, b) { return (a.x - a.y) > (b.x - b.y) ? a : b; });
+              const bl = pts.reduce(function(a, b) { return (a.x - a.y) < (b.x - b.y) ? a : b; });
+              if (new Set([tl, tr, br, bl]).size !== 4) continue;
+              const topW = dist_(tl, tr), botW = dist_(bl, br), leftH = dist_(tl, bl), rightH = dist_(tr, br);
+              if (Math.min(topW, botW, leftH, rightH) < Math.min(w, h) * 0.14) continue;
+              if (Math.max(topW, botW) / Math.min(topW, botW) > 1.75) continue;
+              if (Math.max(leftH, rightH) / Math.min(leftH, rightH) > 1.75) continue;
+              const avgW = (topW + botW) / 2, avgH = (leftH + rightH) / 2;
+              const shortS = Math.min(avgW, avgH), longS = Math.max(avgW, avgH);
+              const ratioErr = Math.abs((shortS / longS) - 0.689);
+              if (ratioErr > 0.34) continue;
+              const avgSz = (pts[0].size + pts[1].size + pts[2].size + pts[3].size) / 4;
+              const relM = avgSz / shortS;
+              if (relM < 0.020 || relM > 0.17) continue;
+              const orient = avgW <= avgH ? "portrait" : "landscape";
+              const fb = (pts[0].sqScore + pts[1].sqScore + pts[2].sqScore + pts[3].sqScore) / 4;
+              const sc = avgW * avgH * fb * (1 - ratioErr * 0.9) * Math.max(0.2, 1 - Math.abs(relM - 0.062) * 3.2);
+              if (sc > bestScore) { bestScore = sc; bestQuad = orient === "portrait" ? [tl, tr, bl, br] : [bl, tl, br, tr]; }
+            }
+          }
+        }
+      }
+      return bestQuad;
+    }
+
+    let found = runPass_(178, 0.80, 0);
+    if (!found) found = runPass_(198, 0.87, 0);
+    if (!found) found = runPass_(0, 0, Math.min(135, Math.max(70, p25 + 28)));
+    return found;
+  }
+
+  function warpOmrToStandardCanvas_(srcCanvas, corners4) {
+    const Hinv = solveHomography_(OMR_CORNERS_STD, corners4);
+    if (!Hinv) return null;
+    const sw = srcCanvas.width, sh = srcCanvas.height;
+    const sData = srcCanvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, sw, sh).data;
+    const dstCv = document.createElement("canvas");
+    dstCv.width = OMR_W; dstCv.height = OMR_H;
+    const dCtx = dstCv.getContext("2d", { willReadFrequently: true });
+    const dImg = dCtx.createImageData(OMR_W, OMR_H);
+    const dd = dImg.data;
+    const h0 = Hinv[0], h1 = Hinv[1], h2 = Hinv[2], h3 = Hinv[3], h4 = Hinv[4], h5 = Hinv[5], h6 = Hinv[6], h7 = Hinv[7];
+    for (let y = 0; y < OMR_H; y++) {
+      const yOff = y * OMR_W * 4, wy1 = h1 * y + h2, wy4 = h4 * y + h5, wy7 = h7 * y + 1;
+      for (let x = 0; x < OMR_W; x++) {
+        const wDen = h6 * x + wy7;
+        const sx = (h0 * x + wy1) / wDen, sy = (h3 * x + wy4) / wDen;
+        const ix = sx | 0, iy = sy | 0, di = yOff + x * 4;
+        if (ix >= 0 && iy >= 0 && ix < sw - 1 && iy < sh - 1) {
+          const fx = sx - ix, fy = sy - iy, o00 = (iy * sw + ix) * 4, o10 = o00 + 4, o01 = o00 + sw * 4, o11 = o01 + 4;
+          const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+          dd[di] = sData[o00]*w00 + sData[o10]*w10 + sData[o01]*w01 + sData[o11]*w11;
+          dd[di+1] = sData[o00+1]*w00 + sData[o10+1]*w10 + sData[o01+1]*w01 + sData[o11+1]*w11;
+          dd[di+2] = sData[o00+2]*w00 + sData[o10+2]*w10 + sData[o01+2]*w01 + sData[o11+2]*w11;
+          dd[di+3] = 255;
+        } else { dd[di] = dd[di+1] = dd[di+2] = dd[di+3] = 255; }
+      }
+    }
+    dCtx.putImageData(dImg, 0, 0);
+    return dstCv;
+  }
+
+  function warpAndOrientOmrCanvas_(srcCanvas, quad4) {
+    const w0 = warpOmrToStandardCanvas_(srcCanvas, quad4);
+    if (!w0) return null;
+    function checkTopRight_(cv) {
+      const qrImg = cv.getContext("2d", { willReadFrequently: true }).getImageData(548, 12, 200, 196);
+      let qrHit = false;
+      if (typeof window.jsQR === "function") {
+        try {
+          const r = window.jsQR(qrImg.data, qrImg.width, qrImg.height, { inversionAttempts: "attemptBoth" });
+          if (r && r.data && r.data.indexOf("CMSOMR|") === 0) qrHit = true;
+        } catch (_) {}
+      }
+      let dark = 0, tot = 0, dd = qrImg.data;
+      for (let i = 0; i < dd.length; i += 16) { if (((dd[i]*77 + dd[i+1]*150 + dd[i+2]*29) >> 8) < 130) dark++; tot++; }
+      return { qrHit: qrHit, darkRatio: tot ? dark / tot : 0 };
+    }
+    const s0 = checkTopRight_(w0);
+    if (s0.qrHit) return w0;
+    const w180 = warpOmrToStandardCanvas_(srcCanvas, [quad4[3], quad4[2], quad4[1], quad4[0]]);
+    if (w180) {
+      const s180 = checkTopRight_(w180);
+      if (s180.qrHit || s180.darkRatio > s0.darkRatio + 0.08) return w180;
+    }
+    return w0;
+  }
+
+  function readWarpedOmrCanvas_(warpedCanvas) {
+    const ctx = warpedCanvas.getContext("2d", { willReadFrequently: true });
+    let qrMeta = null;
+    if (typeof window.jsQR === "function") {
+      try {
+        const qrImg = ctx.getImageData(548, 12, 200, 196);
+        const r = window.jsQR(qrImg.data, qrImg.width, qrImg.height, { inversionAttempts: "attemptBoth" });
+        if (r && r.data && r.data.indexOf("CMSOMR|") === 0) {
+          const parts = r.data.split("|");
+          if (parts.length >= 6) {
+            qrMeta = {
+              erpId: parts[2] === "BLANK" ? "" : parts[2],
+              secKey: parts[3],
+              fromNo: Number(parts[4]) || 1,
+              toNo: Number(parts[5]) || 20,
+              layout: Number(parts[6]) || 30
+            };
+          }
+        }
+      } catch (_) {}
+    }
+
+    const secKey = (qrMeta && qrMeta.secKey && S.itemsBySec[qrMeta.secKey]) ? qrMeta.secKey : S.selSecKey;
+    const secItemsAll = S.itemsBySec[secKey] || [];
+    const fromNo = qrMeta ? qrMeta.fromNo : (S.rangeFrom || 1);
+    const toNo = qrMeta ? qrMeta.toNo : (S.rangeTo || secItemsAll.length || 20);
+    const erpId = (qrMeta && qrMeta.erpId) ? qrMeta.erpId : S.selStudentId;
+
+    const rangeItems = secItemsAll.filter(function(it) { return it.n >= fromNo && it.n <= toNo; });
+    const count = rangeItems.length || Math.max(1, toNo - fromNo + 1);
+    const spec = getOmrGridSpec_(qrMeta && qrMeta.layout === 50 ? 50 : count);
+    const fullImg = ctx.getImageData(0, 0, OMR_W, OMR_H).data;
+
+    function sampleLum_(cx, cy, rad) {
+      let sum = 0, cnt = 0, r2 = rad * rad;
+      const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(OMR_W - 1, Math.ceil(cx + rad));
+      const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(OMR_H - 1, Math.ceil(cy + rad));
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - cy, ro = y * OMR_W;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - cx;
+          if (dx * dx + dy * dy > r2) continue;
+          const p = (ro + x) * 4;
+          sum += (fullImg[p] * 77 + fullImg[p + 1] * 150 + fullImg[p + 2] * 29) >> 8;
+          cnt++;
+        }
+      }
+      return cnt ? sum / cnt : 255;
+    }
+
+    function measureDark_(cx, cy, rad, paperLum) {
+      let darkCnt = 0, totCnt = 0, lumSum = 0, r2 = rad * rad;
+      const thresh = Math.min(195, paperLum - 38);
+      const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(OMR_W - 1, Math.ceil(cx + rad));
+      const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(OMR_H - 1, Math.ceil(cy + rad));
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - cy, ro = y * OMR_W;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - cx;
+          if (dx * dx + dy * dy > r2) continue;
+          const p = (ro + x) * 4;
+          const lum = (fullImg[p] * 77 + fullImg[p + 1] * 150 + fullImg[p + 2] * 29) >> 8;
+          lumSum += lum;
+          if (lum < thresh) darkCnt++;
+          totCnt++;
+        }
+      }
+      if (!totCnt) return 0;
+      return (darkCnt / totCnt) * 0.65 + Math.max(0, (paperLum - (lumSum / totCnt)) / Math.max(80, paperLum)) * 0.55;
+    }
+
+    const prevCv = document.createElement("canvas");
+    prevCv.width = OMR_W; prevCv.height = OMR_H;
+    const pCtx = prevCv.getContext("2d");
+    pCtx.drawImage(warpedCanvas, 0, 0);
+
+    const totalSlots = Math.min(spec.perCol * 2, rangeItems.length);
+    // [□ 구간] 체크박스 판독
+    const rangeRad = spec.is50 ? 5.2 : 6.8;
+    const rangeSamples = [];
+    for (let idx = 0; idx < totalSlots; idx++) {
+      const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
+      const cy = spec.startY + row * spec.stepY, rx = OMR_RANGE_COL_X[col];
+      const paperLum = Math.max(150, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
+      rangeSamples.push({ n: it.n, rx: rx, cy: cy, sc: measureDark_(rx, cy, rangeRad, paperLum) });
+    }
+    const rSorted = rangeSamples.map(function(x) { return x.sc; }).sort(function(a, b) { return a - b; });
+    const rBase = rSorted.length ? rSorted[Math.floor(rSorted.length * 0.25)] : 0;
+    const rangeChecked = rangeSamples.filter(function(s) { return (s.sc - rBase) >= 0.22 && s.sc >= 0.30; });
+    let effFromNo = fromNo, effToNo = toNo, rangeMarked = false;
+    if (rangeChecked.length >= 2) { effFromNo = rangeChecked[0].n; effToNo = rangeChecked[rangeChecked.length - 1].n; rangeMarked = true; }
+    else if (rangeChecked.length === 1 && rangeItems.length > 1 && rangeChecked[0].n > rangeItems[0].n) { effToNo = rangeChecked[0].n; rangeMarked = true; }
+    if (rangeMarked) {
+      const bh = spec.is50 ? 9 : 11;
+      rangeChecked.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - bh, rc.cy - bh, bh * 2, bh * 2); });
+    }
+
+    const answers = {};
+    let warnCount = 0;
+    const innerRad = spec.radius * 0.72;
+    for (let idx = 0; idx < totalSlots; idx++) {
+      const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
+      const cy = spec.startY + row * spec.stepY;
+      if (it.n < effFromNo || it.n > effToNo) {
+        pCtx.fillStyle = "rgba(148,163,184,0.28)";
+        pCtx.fillRect(col === 0 ? 72 : 416, cy - spec.stepY / 2 + 2, 314, spec.stepY - 4);
+        continue;
+      }
+      const isSubj = it.t === "subj", optCnt = isSubj ? 3 : 5;
+      const paperLum = Math.max(150, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
+      const scores = [];
+      for (let b = 0; b < optCnt; b++) scores.push({ b: b, bx: OMR_COL_X[col][b], sc: measureDark_(OMR_COL_X[col][b], cy, innerRad, paperLum) });
+      const sorted = scores.slice().sort(function(a, b) { return a.sc - b.sc; });
+      const baseSc = optCnt >= 4 ? (sorted[0].sc + sorted[1].sc) / 2 : sorted[0].sc;
+      const marked = [];
+      scores.forEach(function(s) { const dl = s.sc - baseSc; if (dl >= 0.165 || s.sc >= 0.42) marked.push({ b: s.b, bx: s.bx, dl: dl, sc: s.sc }); });
+      marked.sort(function(a, b) { return b.dl - a.dl; });
+
+      let val = "", isWarn = false;
+      if (marked.length > 0) {
+        if (isSubj) { val = ["O","△","X"][marked[0].b] || "X"; if (marked.length >= 2 && marked[1].dl > marked[0].dl * 0.7) isWarn = true; }
+        else if (it.t === "multi") { val = marked.map(function(m) { return String(m.b + 1); }).sort().join(","); }
+        else {
+          if (marked.length >= 2 && marked[1].dl > marked[0].dl * 0.68 && marked[1].dl > 0.22) { val = marked.slice(0, 2).map(function(m) { return String(m.b + 1); }).sort().join(","); isWarn = true; }
+          else val = String(marked[0].b + 1);
+        }
+      }
+      if (val) answers[String(it.n)] = val;
+      if (isWarn) warnCount++;
+
+      const corNorm = normAns_(it.a, it.t);
+      const isOk = val ? (isSubj ? val === "O" : val === corNorm) : false;
+      pCtx.lineWidth = 3.5;
+      if (val) marked.forEach(function(mk) { pCtx.beginPath(); pCtx.arc(mk.bx, cy, spec.radius + 3, 0, Math.PI * 2); pCtx.strokeStyle = isWarn ? "#f59e0b" : (isOk ? "#10b981" : "#ef4444"); pCtx.stroke(); });
+      if (!isOk && !isSubj && corNorm) {
+        corNorm.split(",").forEach(function(cd) {
+          const ci = Number(cd) - 1;
+          if (ci >= 0 && ci < 5) { pCtx.beginPath(); pCtx.arc(OMR_COL_X[col][ci], cy, spec.radius - 2, 0, Math.PI * 2); pCtx.strokeStyle = "#2563eb"; pCtx.lineWidth = 2.5; pCtx.stroke(); }
+        });
+      }
+    }
+
+    const thumb = document.createElement("canvas");
+    thumb.width = 400; thumb.height = 560;
+    thumb.getContext("2d").drawImage(prevCv, 0, 0, 400, 560);
+    return {
+      qrFound: Boolean(qrMeta), erpId: erpId, secKey: secKey,
+      fromNo: effFromNo, toNo: effToNo, rangeMarked: rangeMarked,
+      answers: answers, warnCount: warnCount, previewUrl: thumb.toDataURL("image/jpeg", 0.78)
+    };
+  }
+
+  // ===== Camera Control (100% Native Top-Level HTTPS, Zero Iframe!) =====
+  window.stopCam_ = function() {
+    S.camRunning = false;
+    S.torchOn = false;
+    if (RAF) { cancelAnimationFrame(RAF); RAF = null; }
+    if (STREAM) { try { STREAM.getTracks().forEach(function(t) { t.stop(); }); } catch (_) {} STREAM = null; }
+    const v = document.getElementById("camVid");
+    if (v) v.srcObject = null;
+    const cov = document.getElementById("camCover");
+    const bar = document.getElementById("camLiveBar");
+    if (cov) cov.classList.remove("hidden");
+    if (bar) bar.classList.remove("show");
+    const pill = document.getElementById("camPill");
+    if (pill) { pill.className = "cam-pill"; pill.textContent = "카메라 대기 중"; }
+  };
+
+  window.startCam_ = async function() {
+    stopCam_();
+    const pill = document.getElementById("camPill");
+    if (pill) { pill.className = "cam-pill warn"; pill.textContent = "⏳ 카메라 연결 중..."; }
+    try {
+      STREAM = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: S.camFacing }, width: { ideal: 1280 }, height: { ideal: 960 } }
+      });
+    } catch (e1) {
+      try {
+        STREAM = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+      } catch (e2) {
+        const msg = "카메라 권한이 거부되었습니다(" + (e2.name || e2.message || e2) + "). 브라우저 설정에서 카메라를 허용해주세요.";
+        if (pill) { pill.className = "cam-pill err"; pill.textContent = "⚠️ 카메라 권한 필요"; }
+        showTopToast_(msg, "warn");
+        return;
+      }
+    }
+    const vid = document.getElementById("camVid");
+    if (!vid) { stopCam_(); return; }
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.setAttribute("playsinline", "");
+    vid.setAttribute("webkit-playsinline", "");
+    vid.srcObject = STREAM;
+    try { await vid.play(); } catch (e) { stopCam_(); showTopToast_("비디오 재생 오류: " + e.message, "warn"); return; }
+
+    S.camRunning = true;
+    STABLE_CORNERS = null; STABLE_CNT = 0; NO_CORNER_FRAMES = 0;
+    const cov = document.getElementById("camCover");
+    const bar = document.getElementById("camLiveBar");
+    if (cov) cov.classList.add("hidden");
+    if (bar) bar.classList.add("show");
+    if (pill) { pill.className = "cam-pill ok"; pill.textContent = "📷 실시간 스캔 ON · OMR 4코너를 비춰주세요"; }
+
+    // Check torch capability
+    const torchBtn = document.getElementById("btnTorch");
+    if (torchBtn) {
+      try {
+        const track = STREAM.getVideoTracks()[0];
+        const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+        torchBtn.style.display = caps.torch ? "" : "none";
+      } catch (_) { torchBtn.style.display = "none"; }
+    }
+
+    const workCv = document.createElement("canvas");
+    const fullCv = document.createElement("canvas");
+    const loop_ = function(ts) {
+      if (!S.camRunning) return;
+      RAF = requestAnimationFrame(loop_);
+      if (ts - LAST_TICK < 130) return;
+      LAST_TICK = ts;
+      const vw = vid.videoWidth, vh = vid.videoHeight;
+      if (!vw || !vh) return;
+      const ov = document.getElementById("camOv");
+      const pEl = document.getElementById("camPill");
+      if (ov && (ov.width !== vw || ov.height !== vh)) { ov.width = vw; ov.height = vh; }
+      const targetW = 540, scale = targetW / vw, targetH = Math.round(vh * scale);
+      if (workCv.width !== targetW || workCv.height !== targetH) { workCv.width = targetW; workCv.height = targetH; }
+      const wCtx = workCv.getContext("2d", { willReadFrequently: true });
+      wCtx.drawImage(vid, 0, 0, targetW, targetH);
+      const diag = { squares: [] };
+      const quadSmall = detectFourCornerMarkers_(wCtx.getImageData(0, 0, targetW, targetH), targetW, targetH, diag);
+
+      if (ov) {
+        const oCtx = ov.getContext("2d");
+        oCtx.clearRect(0, 0, ov.width, ov.height);
+        if (quadSmall) {
+          const qf = quadSmall.map(function(p) { return { x: p.x / scale, y: p.y / scale }; });
+          oCtx.strokeStyle = STABLE_CNT >= 1 ? "#10b981" : "#facc15";
+          oCtx.lineWidth = Math.max(4, vw * 0.005);
+          oCtx.beginPath();
+          oCtx.moveTo(qf[0].x, qf[0].y); oCtx.lineTo(qf[1].x, qf[1].y);
+          oCtx.lineTo(qf[3].x, qf[3].y); oCtx.lineTo(qf[2].x, qf[2].y);
+          oCtx.closePath(); oCtx.stroke();
+          qf.forEach(function(p) { oCtx.fillStyle = "#10b981"; oCtx.beginPath(); oCtx.arc(p.x, p.y, Math.max(8, vw * 0.01), 0, Math.PI * 2); oCtx.fill(); });
+
+          NO_CORNER_FRAMES = 0;
+          if (STABLE_CORNERS) {
+            let maxM = 0;
+            for (let i = 0; i < 4; i++) maxM = Math.max(maxM, Math.hypot(qf[i].x - STABLE_CORNERS[i].x, qf[i].y - STABLE_CORNERS[i].y));
+            if (maxM < vw * 0.055) STABLE_CNT++; else STABLE_CNT = 0;
+          }
+          STABLE_CORNERS = qf;
+          if (pEl) {
+            pEl.className = "cam-pill " + (STABLE_CNT >= 1 ? "ok" : "warn");
+            pEl.textContent = STABLE_CNT >= 1 ? "✓ OMR 4코너 인식! 다음 답안지를 넘겨주세요" : "🎯 4코너 마커 고정 중...";
+          }
+          if (STABLE_CNT === 1 || (STABLE_CNT > 1 && STABLE_CNT % 6 === 0)) {
+            fullCv.width = vw; fullCv.height = vh;
+            fullCv.getContext("2d").drawImage(vid, 0, 0, vw, vh);
+            const warped = warpAndOrientOmrCanvas_(fullCv, qf);
+            if (warped) {
+              const parsed = readWarpedOmrCanvas_(warped);
+              const ansCnt = Object.keys(parsed.answers || {}).length;
+              const sig = parsed.erpId + "|" + parsed.secKey + "|" + parsed.fromNo + "-" + parsed.toNo + "|" + JSON.stringify(parsed.answers);
+              const nowMs = Date.now();
+              if (sig !== LAST_SIG && (nowMs - LAST_SIG_AT) > 700) {
+                LAST_SIG = sig; LAST_SIG_AT = nowMs;
+                onOmrParsed_(parsed, "직통실시간OMR");
+                if (ansCnt === 0 && !parsed.qrFound) { STABLE_CNT = 0; LAST_SIG = ""; }
+              }
+            }
+          }
+        } else {
+          (diag.squares || []).slice(0, 8).forEach(function(sq) {
+            oCtx.strokeStyle = "rgba(250, 204, 21, 0.85)";
+            oCtx.lineWidth = Math.max(2.5, vw * 0.003);
+            oCtx.beginPath(); oCtx.arc(sq.x / scale, sq.y / scale, Math.max(7, (sq.size / scale) * 0.65), 0, Math.PI * 2); oCtx.stroke();
+          });
+          NO_CORNER_FRAMES++; STABLE_CNT = 0; STABLE_CORNERS = null;
+          if (NO_CORNER_FRAMES >= 3) LAST_SIG = "";
+          if (pEl) {
+            pEl.className = "cam-pill";
+            const cnt = (diag.squares || []).length;
+            pEl.textContent = cnt > 0 ? ("🔍 네모 마커 후보 " + Math.min(4, cnt) + "개 보임 · 네 모서리를 맞춰주세요") : "📄 OMR 네 모서리 검은 사각형을 화면 안에 맞춰주세요";
+          }
+        }
+      }
+    };
+    RAF = requestAnimationFrame(loop_);
+  };
+
+  window.flipCam_ = function() {
+    S.camFacing = S.camFacing === "user" ? "environment" : "user";
+    if (S.camRunning) startCam_();
+  };
+
+  window.toggleTorch_ = async function() {
+    if (!STREAM) return;
+    try {
+      const track = STREAM.getVideoTracks()[0];
+      S.torchOn = !S.torchOn;
+      await track.applyConstraints({ advanced: [{ torch: S.torchOn }] });
+      const btn = document.getElementById("btnTorch");
+      if (btn) btn.classList.toggle("torch-on", S.torchOn);
+    } catch (_) {
+      showTopToast_("이 기기는 웹 손전등 제어를 지원하지 않습니다.", "warn");
+    }
+  };
+
+  window.snapLiveNow_ = function() {
+    const vid = document.getElementById("camVid");
+    if (!S.camRunning || !vid || !vid.videoWidth) { showTopToast_("먼저 카메라를 켜주세요.", "warn"); return; }
+    const vw = vid.videoWidth, vh = vid.videoHeight;
+    const fullCv = document.createElement("canvas");
+    fullCv.width = vw; fullCv.height = vh;
+    fullCv.getContext("2d").drawImage(vid, 0, 0, vw, vh);
+    let quadFull = null;
+    [640, 900].forEach(function(tw) {
+      if (quadFull) return;
+      const sc = Math.min(1, tw / Math.max(vw, vh)), ww = Math.round(vw * sc), wh = Math.round(vh * sc);
+      const wc = document.createElement("canvas"); wc.width = ww; wc.height = wh;
+      const wCtx = wc.getContext("2d", { willReadFrequently: true }); wCtx.drawImage(fullCv, 0, 0, ww, wh);
+      const q = detectFourCornerMarkers_(wCtx.getImageData(0, 0, ww, wh), ww, wh);
+      if (q) quadFull = q.map(function(p) { return { x: p.x / sc, y: p.y / sc }; });
+    });
+    if (!quadFull) { beep_("warn"); showTopToast_("네 모서리 검은 사각형 4개를 찾지 못했습니다. 살짝 뒤로 비춰주세요.", "warn"); return; }
+    const warped = warpAndOrientOmrCanvas_(fullCv, quadFull);
+    if (!warped) return;
+    LAST_SIG = "";
+    onOmrParsed_(readWarpedOmrCanvas_(warped), "직통실시간OMR");
+  };
+
+  window.handleFiles_ = async function(fileList, inpEl) {
+    const files = Array.prototype.slice.call(fileList || []);
+    if (inpEl) setTimeout(function() { try { inpEl.value = ""; } catch (_) {} }, 120);
+    if (!files.length) return;
+    showTopToast_("OMR 사진 " + files.length + "장 판독 중...", "info");
+    let ok = 0, fail = 0;
+    const procOne_ = function(cv) {
+      let qf = null;
+      [640, 900].forEach(function(tw) {
+        if (qf) return;
+        const sc = Math.min(1, tw / Math.max(cv.width, cv.height)), ww = Math.round(cv.width * sc), wh = Math.round(cv.height * sc);
+        const wc = document.createElement("canvas"); wc.width = ww; wc.height = wh;
+        const wCtx = wc.getContext("2d", { willReadFrequently: true }); wCtx.drawImage(cv, 0, 0, ww, wh);
+        const q = detectFourCornerMarkers_(wCtx.getImageData(0, 0, ww, wh), ww, wh);
+        if (q) qf = q.map(function(p) { return { x: p.x / sc, y: p.y / sc }; });
+      });
+      if (!qf) return false;
+      const w = warpAndOrientOmrCanvas_(cv, qf);
+      if (!w) return false;
+      onOmrParsed_(readWarpedOmrCanvas_(w), "직통사진OMR");
+      ok++; return true;
+    };
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const im = await new Promise(function(res, rej) {
+          const img = new Image();
+          let triedReader = false;
+          const loadViaReader = function() {
+            triedReader = true;
+            const fr = new FileReader();
+            fr.onload = function() { img.src = fr.result; };
+            fr.onerror = function() { rej(new Error("read")); };
+            fr.readAsDataURL(files[i]);
+          };
+          let u = "";
+          try { u = URL.createObjectURL(files[i]); } catch (_) {}
+          img.onload = function() { if (u) { try { URL.revokeObjectURL(u); } catch (_) {} } res(img); };
+          img.onerror = function() {
+            if (u) { try { URL.revokeObjectURL(u); } catch (_) {} u = ""; }
+            if (!triedReader) loadViaReader(); else rej(new Error("load"));
+          };
+          if (u) img.src = u; else loadViaReader();
+        });
+        const cv = document.createElement("canvas");
+        const sc = Math.min(1, 1800 / Math.max(im.naturalWidth || im.width, im.naturalHeight || im.height));
+        cv.width = Math.round((im.naturalWidth || im.width) * sc);
+        cv.height = Math.round((im.naturalHeight || im.height) * sc);
+        cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+        if (!procOne_(cv)) {
+          let hOk = 0;
+          if (cv.width > cv.height * 1.15) {
+            const hw = Math.floor(cv.width / 2);
+            for (let h = 0; h < 2; h++) {
+              const hc = document.createElement("canvas"); hc.width = hw; hc.height = cv.height;
+              hc.getContext("2d").drawImage(cv, h * hw, 0, hw, cv.height, 0, 0, hw, cv.height);
+              if (procOne_(hc)) hOk++;
+            }
+          }
+          if (!hOk) fail++;
+        }
+      } catch (_) { fail++; }
+    }
+    showTopToast_("판독 완료: 성공 " + ok + "건" + (fail ? " · 미인식 " + fail + "건" : ""), ok ? "ok" : "warn");
+  };
+
+  function onOmrParsed_(parsed, method) {
+    const stu = getStu_(parsed.erpId) || getStu_(S.selStudentId);
+    const meta = getSecMeta_(parsed.secKey);
+    const graded = gradeLocal_(parsed.secKey, parsed.answers, parsed.fromNo, parsed.toNo);
+    const item = {
+      id: "D_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 5),
+      erpId: stu ? stu.erpId : (parsed.erpId || ""),
+      name: stu ? stu.name : "학생 선택 필요",
+      school: stu ? stu.school : "",
+      naesinBan: stu ? stu.naesinBan : "",
+      secKey: parsed.secKey, secTitle: meta.title,
+      fromNo: parsed.fromNo, toNo: parsed.toNo,
+      rangeMarked: Boolean(parsed.rangeMarked),
+      answers: parsed.answers, graded: graded,
+      method: method, previewUrl: parsed.previewUrl || "",
+      warnCount: parsed.warnCount || 0, saved: false, saving: false
+    };
+    const exIdx = S.queue.findIndex(function(q) {
+      return !q.saved && q.erpId === item.erpId && q.secKey === item.secKey && q.fromNo === item.fromNo && q.toNo === item.toNo;
+    });
+    if (exIdx >= 0) S.queue[exIdx] = item; else S.queue.unshift(item);
+    S.activeId = item.id;
+    beep_(item.warnCount ? "warn" : "ok");
+
+    const bn = document.getElementById("camBanner");
+    if (bn) {
+      bn.innerHTML = '<span>✓ ' + esc_(item.name) + ' · ' + esc_(meta.shortLbl) + ' · <strong>' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong>' + (item.rangeMarked ? ' [구간체크]' : '') + '</span><span style="font-size:11px; opacity:0.9;">다음 종이를 비추세요</span>';
+      bn.classList.add("show");
+      clearTimeout(bn._tm);
+      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, 2800);
+    }
+    renderRight_();
+    if (S.autoSave && stu && graded.solved > 0) saveItem_(item.id, true);
+  }
+
+  async function postApi_(payload) {
+    const resp = await fetch(S.apiUrl, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    return await resp.json();
+  }
+
+  window.saveItem_ = async function(id, silent) {
+    const item = S.queue.find(function(x) { return x.id === id; });
+    if (!item) return;
+    const stu = getStu_(item.erpId);
+    if (!stu) { showTopToast_("학생을 먼저 선택해주세요.", "warn"); return; }
+    item.saving = true;
+    renderRight_();
+    try {
+      const res = await postApi_({
+        api: "naesinOmrSave", tok: S.tok, seasonCode: S.seasonCode, teacher: S.teacher,
+        entries: [{
+          erpId: stu.erpId, name: stu.name, school: stu.school, naesinBan: stu.naesinBan,
+          secKey: item.secKey, answers: filterAnsToRange_(item.answers, item.fromNo, item.toNo),
+          mergeMode: true, replaceRange: [item.fromNo, item.toNo], method: item.method
+        }]
+      });
+      item.saving = false;
+      if (res && res.success) {
+        item.saved = true;
+        if (!silent) showTopToast_("✓ " + stu.name + " 채점 저장 및 전자 내신출석부 반영 완료!", "ok");
+      } else {
+        showTopToast_("저장 실패: " + ((res && res.message) || "오류"), "warn");
+      }
+    } catch (err) {
+      item.saving = false;
+      showTopToast_("네트워크 저장 오류: " + (err.message || err), "warn");
+    }
+    renderRight_();
+  };
+
+  window.saveAllUnsaved_ = async function() {
+    const list = S.queue.filter(function(q) { return !q.saved && getStu_(q.erpId); });
+    if (!list.length) return;
+    showTopToast_(list.length + "건 일괄 저장 중...", "info");
+    try {
+      const entries = list.map(function(it) {
+        const st = getStu_(it.erpId);
+        return {
+          erpId: st.erpId, name: st.name, school: st.school, naesinBan: st.naesinBan,
+          secKey: it.secKey, answers: filterAnsToRange_(it.answers, it.fromNo, it.toNo),
+          mergeMode: true, replaceRange: [it.fromNo, it.toNo], method: it.method
+        };
+      });
+      const res = await postApi_({ api: "naesinOmrSave", tok: S.tok, seasonCode: S.seasonCode, teacher: S.teacher, entries: entries });
+      if (res && res.success) {
+        list.forEach(function(q) { q.saved = true; });
+        showTopToast_("✓ " + res.message, "ok");
+      } else { showTopToast_("저장 실패: " + ((res && res.message) || "오류"), "warn"); }
+    } catch (e) { showTopToast_("오류: " + e.message, "warn"); }
+    renderRight_();
+  };
+
+  window.selQ_ = function(id) { S.activeId = id; renderRight_(); };
+  window.clearQ_ = function() { S.queue = []; S.activeId = ""; renderRight_(); };
+  window.reassignStu_ = function(id, eid) {
+    const q = S.queue.find(function(x) { return x.id === id; }), st = getStu_(eid);
+    if (q && st) { q.erpId = st.erpId; q.name = st.name; q.school = st.school; q.naesinBan = st.naesinBan; q.saved = false; renderRight_(); }
+  };
+  window.setQRange_ = function(id, fV, tV) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
+    const maxN = (S.itemsBySec[q.secKey] || []).length || 999;
+    let f = fV != null ? Number(fV) : q.fromNo, t = tV != null ? Number(tV) : q.toNo;
+    f = Math.max(1, Math.min(maxN, Math.round(f || 1))); t = Math.max(f, Math.min(maxN, Math.round(t || maxN)));
+    q.fromNo = f; q.toNo = t; q.saved = false; renderRight_();
+  };
+  window.markBlanksX_ = function(id) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
+    (S.itemsBySec[q.secKey] || []).forEach(function(it) { if (it.n >= q.fromNo && it.n <= q.toNo && !q.answers[String(it.n)]) q.answers[String(it.n)] = "X"; });
+    q.saved = false; renderRight_();
+  };
+  window.toggleAns_ = function(id, n, opt, qt) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
+    const k = String(n), cur = q.answers[k] || "";
+    if (opt === "X") { if (cur === "X") delete q.answers[k]; else q.answers[k] = "X"; }
+    else if (qt === "multi") {
+      const a = (cur && cur !== "X") ? cur.split(",") : [], idx = a.indexOf(opt);
+      if (idx >= 0) a.splice(idx, 1); else a.push(opt);
+      a.sort(); if (a.length) q.answers[k] = a.join(","); else delete q.answers[k];
+    } else { if (cur === opt) delete q.answers[k]; else q.answers[k] = opt; }
+    q.saved = false; renderRight_();
+  };
+
+  function renderMain_() {
+    const host = document.getElementById("appBody");
+    host.className = "main-grid";
+    host.innerHTML =
+      '<div class="panel">' +
+        '<div class="cam-stage">' +
+          '<video id="camVid" playsinline webkit-playsinline muted autoplay></video>' +
+          '<canvas id="camOv" class="cam-ov"></canvas>' +
+          '<div class="cam-hud">' +
+            '<span id="camPill" class="cam-pill">▶ 아래 버튼을 눌러 실시간 카메라를 켜세요</span>' +
+            '<span id="autoSavePill" class="cam-pill">' + (S.autoSave ? '⚡ 자동저장 ON' : '수동저장') + '</span>' +
+          '</div>' +
+          '<div id="camCover" class="cam-start-cover">' +
+            '<div style="font-size:17px; font-weight:900;">📷 iframe 없는 직통 실시간 OMR 스캐너</div>' +
+            '<div style="font-size:12.5px; color:#cbd5e1; max-width:390px; line-height:1.5;">아이패드 · 아이폰 · 갤럭시 탭 · PC 모든 기기에서 보안 차단 없이 앱 안에서 60fps 실시간 OMR 채점이 바로 작동합니다.</div>' +
+            '<div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:4px;">' +
+              '<button type="button" class="btn em" style="padding:12px 20px; font-size:14px;" onclick="startCam_()">▶ 실시간 카메라 켜기</button>' +
+              '<label class="btn pri" style="padding:12px 16px; font-size:13px;">🖼️ 사진 여러 장 일괄 채점<input type="file" accept="image/*" multiple style="display:none;" onchange="handleFiles_(this.files, this)"></label>' +
+            '</div>' +
+          '</div>' +
+          '<div id="camBanner" class="cam-banner"></div>' +
+          '<div id="camLiveBar" class="cam-live-bar">' +
+            '<button type="button" class="cam-fab snap" onclick="snapLiveNow_()">📸 지금 즉시 판독</button>' +
+            '<button type="button" class="cam-fab" onclick="flipCam_()">🔄 전/후면 전환</button>' +
+            '<button type="button" id="btnTorch" class="cam-fab" style="display:none;" onclick="toggleTorch_()">🔦 손전등</button>' +
+            '<button type="button" class="cam-fab stop" onclick="stopCam_()">■ 끄기</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="cam-opts">' +
+          '<div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">' +
+            '<label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" ' + (S.autoSave ? 'checked' : '') + ' onchange="S_SET_(\'autoSave\', this.checked)"> 스캔 즉시 출석부 자동저장</label>' +
+            '<label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" ' + (S.soundOn ? 'checked' : '') + ' onchange="S_SET_(\'soundOn\', this.checked)"> "띠릭!" 효과음</label>' +
+          '</div>' +
+          '<label class="btn sm">🖼️ 사진 업로드<input type="file" accept="image/*" multiple style="display:none;" onchange="handleFiles_(this.files, this)"></label>' +
+        '</div>' +
+        '<div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--line); display:flex; gap:6px; flex-wrap:wrap; align-items:center;">' +
+          '<span style="font-size:11px; color:#94a3b8; font-weight:800;">QR 없는 공용 OMR 기본대상:</span>' +
+          '<select class="sel" onchange="S_SET_(\'selStudentId\', this.value)">' +
+            S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === S.selStudentId ? ' selected' : '') + '>[' + esc_(s.naesinBan) + '] ' + esc_(s.name) + '</option>'; }).join("") +
+          '</select>' +
+          '<select class="sel" style="max-width:210px;" onchange="S_SET_SEC_(this.value)">' +
+            S.sections.map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === S.selSecKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
+          '</select>' +
+          '<input type="number" class="rng-inp" min="1" value="' + S.rangeFrom + '" onchange="S_SET_(\'rangeFrom\', Number(this.value)||1)">' +
+          '<span style="color:#94a3b8;">~</span>' +
+          '<input type="number" class="rng-inp" min="1" value="' + S.rangeTo + '" onchange="S_SET_(\'rangeTo\', Number(this.value)||20)">' +
+        '</div>' +
+      '</div>' +
+      '<div id="rightPanel" class="panel"></div>';
+    renderRight_();
+  }
+
+  window.S_SET_ = function(k, v) {
+    S[k] = v;
+    if (k === "autoSave") {
+      const el = document.getElementById("autoSavePill");
+      if (el) el.textContent = v ? "⚡ 자동저장 ON" : "수동저장";
+    }
+  };
+  window.S_SET_SEC_ = function(sk) {
+    S.selSecKey = sk;
+    const n = (S.itemsBySec[sk] || []).length || 20;
+    S.rangeFrom = 1; S.rangeTo = Math.min(n, 50);
+    renderMain_();
+  };
+
+  function renderRight_() {
+    const host = document.getElementById("rightPanel");
+    if (!host) return;
+    const act = S.queue.find(function(q) { return q.id === S.activeId; }) || S.queue[0] || null;
+    const unsaved = S.queue.filter(function(q) { return !q.saved; }).length;
+    let h = '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">' +
+      '<div style="font-size:14px; font-weight:900;">⚡ 스캔 채점함 (' + S.queue.length + '건)</div>' +
+      '<div style="display:flex; gap:5px;">' +
+        (unsaved ? '<button type="button" class="btn em sm" onclick="saveAllUnsaved_()">💾 미저장 ' + unsaved + '건 일괄저장</button>' : '') +
+        (S.queue.length ? '<button type="button" class="btn sm" onclick="clearQ_()">비우기</button>' : '') +
+      '</div>' +
+    '</div>';
+
+    if (!S.queue.length) {
+      h += '<div style="padding:28px 12px; text-align:center; color:#94a3b8; font-size:12.5px; line-height:1.6;">왼쪽에서 <strong>[▶ 실시간 카메라 켜기]</strong>를 누르고 OMR을 비추면<br>자동으로 채점되어 <strong>전자 내신출석부</strong>까지 즉시 저장됩니다.</div>';
+    } else {
+      h += '<div class="q-list">';
+      S.queue.forEach(function(q) {
+        const g = gradeLocal_(q.secKey, q.answers, q.fromNo, q.toNo);
+        q.graded = g;
+        h += '<div class="q-item ' + (act && act.id === q.id ? 'sel ' : '') + (q.saved ? 'saved' : 'unsaved') + '" onclick="selQ_(\'' + esc_(q.id) + '\')">' +
+          '<div><div style="font-size:13px; font-weight:800;">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
+          '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + q.fromNo + '~' + q.toNo + '번</div></div>' +
+          '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
+          '<div style="font-size:10.5px; color:' + (q.saved ? '#34d399' : '#fbbf24') + ';">' + (q.saving ? '☁️ 저장 중...' : (q.saved ? '✓ 출석부 저장됨' : '● 미저장')) + '</div></div>' +
+        '</div>';
+      });
+      h += '</div>';
+    }
+
+    if (act) {
+      const g = gradeLocal_(act.secKey, act.answers, act.fromNo, act.toNo);
+      const maxN = (S.itemsBySec[act.secKey] || []).length || act.toNo || 20;
+      h += '<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line);">' +
+        '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
+          '<div><div style="font-size:13.5px; font-weight:900;">🔍 ' + esc_(act.name) + ' · ' + act.fromNo + '~' + act.toNo + '번</div>' +
+          '<div style="font-size:11.5px; color:#cbd5e1; margin-top:2px;">맞음 <strong style="color:#34d399;">' + g.correct + '</strong> · 틀림 <strong style="color:#f87171;">' + g.wrong + '</strong> · 정답률 <strong style="color:#38bdf8;">' + g.acc + '%</strong></div></div>' +
+          '<div style="display:flex; gap:5px; align-items:center;">' +
+            '<select class="sel" style="height:28px; max-width:130px;" onchange="reassignStu_(\'' + esc_(act.id) + '\', this.value)">' +
+              S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === act.erpId ? ' selected' : '') + '>' + esc_(s.name) + '</option>'; }).join("") +
+            '</select>' +
+            '<button type="button" class="btn em sm" onclick="saveItem_(\'' + esc_(act.id) + '\', false)">💾 저장</button>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; padding:7px 9px; border-radius:9px; background:rgba(124,58,237,0.16); border:1px solid rgba(167,139,250,0.35); margin-bottom:8px; font-size:11.5px; font-weight:800;">' +
+          '<span style="display:inline-flex; align-items:center; gap:4px;">🎯 범위: <input type="number" class="rng-inp" min="1" max="' + maxN + '" value="' + act.fromNo + '" onchange="setQRange_(\'' + esc_(act.id) + '\', this.value, null)"> ~ <input type="number" class="rng-inp" min="1" max="' + maxN + '" value="' + act.toNo + '" onchange="setQRange_(\'' + esc_(act.id) + '\', null, this.value)">번</span>' +
+          '<button type="button" class="btn sm" style="background:rgba(239,68,68,0.22); border-color:rgba(248,113,113,0.45);" onclick="markBlanksX_(\'' + esc_(act.id) + '\')">빈칸→오답(X)</button>' +
+        '</div>' +
+        (act.previewUrl ? '<details style="margin-bottom:8px;"><summary style="cursor:pointer; font-size:11.5px; font-weight:800; color:#7dd3fc;">🖼️ 원근보정 OMR 오버레이 보기</summary><img src="' + act.previewUrl + '" style="width:100%; max-width:280px; border-radius:8px; margin-top:6px; display:block;"></details>' : '') +
+        '<div class="ans-grid">';
+      g.perItem.forEach(function(pi) {
+        const rCls = pi.status === "ok" ? " ok" : (pi.status === "bad" ? " bad" : "");
+        const corSet = pi.t === "subj" ? ["O"] : normAns_(pi.cor, pi.t).split(",");
+        const stuSet = pi.stu ? pi.stu.split(",") : [];
+        const opts = pi.t === "subj" ? ["O","△","X"] : ["1","2","3","4","5","X"];
+        h += '<div class="ans-row' + rCls + '"><span class="ans-no">' + pi.n + '.</span>';
+        opts.forEach(function(o) {
+          const picked = stuSet.indexOf(o) !== -1, isCor = corSet.indexOf(o) !== -1;
+          let cls = "bub";
+          if (picked) cls += " picked " + (pi.status === "ok" ? "ok" : "bad");
+          if (isCor && !picked) cls += " ans-hint";
+          h += '<button type="button" class="' + cls + '" onclick="toggleAns_(\'' + esc_(act.id) + '\',' + pi.n + ',\'' + o + '\',\'' + pi.t + '\')">' + o + '</button>';
+        });
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
+    host.innerHTML = h;
+  }
+
+  function showLockedScreen_(msg) {
+    const host = document.getElementById("appBody");
+    host.className = "cms-hud-wrap";
+    host.innerHTML = '<div class="cms-hud-card" style="text-align:center; padding:26px 20px;">' +
+      '<div style="font-size:28px; margin-bottom:8px;">🔒</div>' +
+      '<div style="font-size:15px; font-weight:900; margin-bottom:6px;">CMS 교사 포털 인증이 필요합니다</div>' +
+      '<div style="font-size:12.5px; color:#94a3b8; line-height:1.6;">' + esc_(msg || "학생 정보 보호를 위해 CMS 교사 포털의 [CMS내신교재 채점 ➔ 🚀 직통 실시간 스캐너 열기] 버튼 또는 QR 코드로 접속해 주세요.") + '</div>' +
+    '</div>';
+  }
+
+  function parseAuthFromHash_() {
+    const hash = String(location.hash || "").replace(/^#/, "");
+    const params = new URLSearchParams(hash);
+    let api = params.get("api") || "";
+    let tok = params.get("tok") || "";
+    if (api && tok) {
+      try {
+        sessionStorage.setItem("cms_no_api", api);
+        sessionStorage.setItem("cms_no_tok", tok);
+        history.replaceState(null, "", location.pathname + location.search);
+      } catch (_) {}
+    } else {
+      try {
+        api = sessionStorage.getItem("cms_no_api") || "";
+        tok = sessionStorage.getItem("cms_no_tok") || "";
+      } catch (_) {}
+    }
+    S.apiUrl = api;
+    S.tok = tok;
+  }
+
+  window.reloadBootData_ = async function(force) {
+    if (!S.apiUrl || !S.tok) { showLockedScreen_(); return; }
+    const pEl = document.getElementById("bootPct"), fEl = document.getElementById("bootFill");
+    if (pEl) pEl.textContent = "52%"; if (fEl) fEl.style.width = "52%";
+    try {
+      const url = S.apiUrl + (S.apiUrl.indexOf("?") >= 0 ? "&" : "?") + "api=naesinOmrBoot&tok=" + encodeURIComponent(S.tok) + (force ? "&force=1" : "");
+      const resp = await fetch(url, { redirect: "follow" });
+      const res = await resp.json();
+      if (!res || !res.success) {
+        showLockedScreen_((res && res.message) || "인증 토큰이 만료되었습니다. 포털에서 다시 열어주세요.");
+        return;
+      }
+      S.seasonCode = res.seasonCode || "2026_2_FINAL";
+      S.seasonName = res.seasonName || "";
+      S.teacher = res.teacher || "직통OMR스캐너";
+      S.students = res.students || [];
+      S.sections = res.sections || [];
+      S.itemsBySec = res.itemsBySec || {};
+      S.results = res.results || [];
+      if (!S.selStudentId && S.students.length) S.selStudentId = S.students[0].erpId;
+      const sb = document.getElementById("seasonBadge");
+      const sy = document.getElementById("syncBadge");
+      if (sb) sb.textContent = (S.seasonName || "2026 기말") + " · " + S.teacher;
+      if (sy) sy.style.display = "";
+      renderMain_();
+      showTopToast_("✓ 정답 DB 연결 완료! [▶ 실시간 카메라 켜기]를 눌러 바로 채점하세요.", "ok");
+    } catch (err) {
+      showLockedScreen_("서버 연결 실패: " + (err.message || err));
+    }
+  };
+
+  parseAuthFromHash_();
+  reloadBootData_(false);
+})();
+</script>
+</body>
+</html>
