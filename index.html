@@ -1205,8 +1205,8 @@
           return;
         }
         if (sl.kind === "subj") {
-          const sx = Math.max(0, Math.round(sl.bx0)), sy = Math.max(0, Math.round(sl.by0));
-          const sw = Math.min(OMR_W - sx, Math.round(sl.bw)), sh = Math.min(OMR_H - sy, Math.round(sl.bh));
+          const sx = Math.max(0, Math.round(sl.bx0 - 6)), sy = Math.max(0, Math.round(sl.by0 - 4));
+          const sw = Math.min(OMR_W - sx, Math.round(sl.bw + 52)), sh = Math.min(OMR_H - sy, Math.round(sl.bh + 8));
           subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 1.4);
           subjPendingNos.push(it.n);
           pCtx.save(); pCtx.strokeStyle = "#6366f1"; pCtx.lineWidth = 2.5; pCtx.setLineDash([6, 4]);
@@ -1279,9 +1279,9 @@
       }
       const isSubj = it.t === "subj";
       if (isSubj) {
-        const sx = col === 0 ? 136 : 488;
-        const sw = 256;
-        const halfH = Math.round(Math.max(15, spec.stepY * 0.56));
+        const sx = col === 0 ? 132 : 476;
+        const sw = col === 0 ? 276 : Math.min(OMR_W - sx, 324);
+        const halfH = Math.round(Math.max(20, spec.stepY * 0.70));
         const sy = Math.max(0, Math.round(cy - halfH));
         const sh = Math.min(OMR_H - sy, halfH * 2);
         subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 1.6);
