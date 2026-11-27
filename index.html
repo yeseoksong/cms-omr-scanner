@@ -1139,7 +1139,7 @@
         }
         g.putImageData(id, 0, 0);
       } catch (_) {}
-      return c.toDataURL("image/jpeg", 0.90);
+      return c.toDataURL("image/jpeg", 0.80);
     }
 
     const answers = {};
@@ -1162,7 +1162,7 @@
         const halfH = Math.round(Math.max(15, spec.stepY * 0.56));
         const sy = Math.max(0, Math.round(cy - halfH));
         const sh = Math.min(OMR_H - sy, halfH * 2);
-        subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 2);
+        subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 1.6);
         subjPendingNos.push(it.n);
         pCtx.save();
         pCtx.strokeStyle = "#6366f1";
@@ -1656,7 +1656,7 @@
         bn.innerHTML = '<span>⚠️ QR 미인식 · 자동저장 차단됨! 오른쪽에서 학생·교재 선택 후 저장하세요</span><span style="font-size:11px;">재스캔 가능</span>';
       } else if (hasPendSubj) {
         bn.style.background = "rgba(79, 70, 229, 0.95)";
-        bn.innerHTML = '<span>✍️ ' + esc_(item.name) + ' · 서술형 단답 ' + subjPendingNos.length + '문항 감지 — 오른쪽에서 단답 확인/OCR 후 [💾 저장]하세요</span><span style="font-size:11px;">자동저장 보류</span>';
+        bn.innerHTML = '<span>✍️ ' + esc_(item.name) + ' · 객관식 ' + graded.correct + '/' + graded.solved + ' + 서술형 ' + subjPendingNos.length + '문항 필기 보관함 전송!</span><span style="font-size:11px;">포털 하이드로젠 채점 대기</span>';
       } else if (isWrongRetest) {
         bn.style.background = "rgba(109, 40, 217, 0.95)";
         bn.innerHTML = '<span>🎯 ' + esc_(item.name) + ' 오답 재채점 (' + esc_(formatRanges_(ranges)) + '번) · <strong>해결 ' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong></span><span style="font-size:11px; opacity:0.9;">오답해결 자동반영</span>';
@@ -1666,13 +1666,11 @@
       }
       bn.classList.add("show");
       clearTimeout(bn._tm);
-      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, (qrMissing || !stu || hasPendSubj) ? 4800 : 2800);
+      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, (qrMissing || !stu || hasPendSubj) ? 4000 : 2800);
     }
     renderRight_();
-    // 서술형 단답이 포함된 경우 확인 전 자동저장 보류!
-    if (hasPendSubj) return;
-    // QR로 학생·교재가 정확히 확인된 경우에만 자동 저장! (오저장 원천 차단)
-    if (S.autoSave && !qrMissing && !isBlankCard && stu && graded.solved > 0) saveItem_(item.id, true);
+    // QR 정상 학생이면 객관식 채점 + 서술형 필기 이미지를 즉시 서버 보관함으로 자동 저장 (포털에서 하이드로젠 백그라운드 일괄 채점!)
+    if (S.autoSave && !qrMissing && !isBlankCard && stu && (graded.solved > 0 || hasPendSubj)) saveItem_(item.id, true);
   }
 
   async function postApi_(payload) {
@@ -1691,18 +1689,22 @@
     const stu = getStu_(item.erpId);
     if (!stu) { showTopToast_("학생을 먼저 선택해주세요.", "warn"); return; }
     const ranges = (Array.isArray(item.ranges) && item.ranges.length) ? item.ranges : [[item.fromNo, item.toNo]];
-    if (!silent) {
-      const preG = item.isWrongRetest ? gradeWrongSetLocal_(item.wrongSetId, item.answers, ranges) : gradeLocal_(item.secKey, item.answers, ranges);
-      if (preG.ungradedSubj > 0 && preG.solved > 0) {
-        const okX = window.confirm(
-          "⚠️ 서술형 " + preG.ungradedSubjNos.join(", ") + "번(" + preG.ungradedSubj + "문항)이 아직 채점되지 않았습니다!\n"
-          + "• [확인] → 미채점 서술형을 오답(X)으로 포함해 " + (preG.solved + preG.ungradedSubj) + "문항 전체로 저장\n"
-          + "• [취소] → 저장 중단 후 서술형 먼저 채점"
-        );
-        if (!okX) return;
-        preG.ungradedSubjNos.forEach(function(sn) { item.answers[String(sn)] = "X"; });
-        item.subjPendingNos = [];
-      }
+    const scopedCrops = {};
+    Object.keys(item.subjCrops || {}).forEach(function(k) {
+      const n = Number(k);
+      if (Number.isFinite(n) && isInRanges_(n, ranges) && item.subjCrops[k]) scopedCrops[String(n)] = item.subjCrops[k];
+    });
+    const hasScopedCrops = Object.keys(scopedCrops).length > 0;
+    const preG = item.isWrongRetest ? gradeWrongSetLocal_(item.wrongSetId, item.answers, ranges) : gradeLocal_(item.secKey, item.answers, ranges);
+    if (!silent && preG.ungradedSubj > 0 && preG.solved > 0 && !hasScopedCrops) {
+      const okX = window.confirm(
+        "⚠️ 서술형 " + preG.ungradedSubjNos.join(", ") + "번(" + preG.ungradedSubj + "문항)이 아직 채점되지 않았습니다!\n"
+        + "• [확인] → 미채점 서술형을 오답(X)으로 포함해 " + (preG.solved + preG.ungradedSubj) + "문항 전체로 저장\n"
+        + "• [취소] → 저장 중단 후 서술형 먼저 채점"
+      );
+      if (!okX) return;
+      preG.ungradedSubjNos.forEach(function(sn) { item.answers[String(sn)] = "X"; });
+      item.subjPendingNos = [];
     }
 
     // 🎯 오답노트 재채점 OMR 저장 경로
@@ -1743,11 +1745,14 @@
     item.saving = true;
     renderRight_();
     try {
+      const scopedAns = filterAnsToRanges_(item.answers, ranges);
       const res = await postApi_({
         api: "naesinOmrSave", tok: S.tok, seasonCode: S.seasonCode, teacher: S.teacher,
         entries: [{
           erpId: stu.erpId, name: stu.name, school: stu.school, naesinBan: stu.naesinBan,
-          secKey: item.secKey, answers: filterAnsToRanges_(item.answers, ranges),
+          secKey: item.secKey, answers: scopedAns,
+          subjCrops: hasScopedCrops ? scopedCrops : undefined,
+          subjQueueOnly: Boolean(preG.solved === 0 && hasScopedCrops),
           mergeMode: true, replaceRanges: ranges, method: item.method
         }]
       });
@@ -1756,7 +1761,7 @@
         item.saved = true;
         item.qrMissing = false;
         item.savedKey = newKey;
-        if (!silent) showTopToast_("✓ " + stu.name + " · " + item.secTitle + " 저장 및 출석부 반영 완료!", "ok");
+        if (!silent) showTopToast_("✓ " + (res.message || (stu.name + " · " + item.secTitle + " 저장 완료!")), "ok");
       } else {
         showTopToast_("저장 실패: " + ((res && res.message) || "오류"), "warn");
       }
@@ -1803,9 +1808,17 @@
       const entries = list.map(function(it) {
         const st = getStu_(it.erpId);
         const ranges = (Array.isArray(it.ranges) && it.ranges.length) ? it.ranges : [[it.fromNo, it.toNo]];
+        const sc = {};
+        Object.keys(it.subjCrops || {}).forEach(function(k) {
+          const n = Number(k);
+          if (Number.isFinite(n) && isInRanges_(n, ranges) && it.subjCrops[k]) sc[String(n)] = it.subjCrops[k];
+        });
+        const g = gradeLocal_(it.secKey, it.answers, ranges);
         return {
           erpId: st.erpId, name: st.name, school: st.school, naesinBan: st.naesinBan,
           secKey: it.secKey, answers: filterAnsToRanges_(it.answers, ranges),
+          subjCrops: Object.keys(sc).length ? sc : undefined,
+          subjQueueOnly: Boolean(g.solved === 0 && Object.keys(sc).length > 0),
           mergeMode: true, replaceRanges: ranges, method: it.method
         };
       });
