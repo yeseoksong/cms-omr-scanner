@@ -111,6 +111,8 @@
     }
     .cam-stage video { width: 100%; height: 100%; object-fit: contain; display: block; background: #020617; }
     .cam-stage canvas.cam-ov { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+    .cam-stage video.mirror, .cam-stage canvas.cam-ov.mirror { transform: scaleX(-1); }
+    .cam-fab.active-opt { background: #2563eb; border-color: #93c5fd; }
     .cam-hud {
       position: absolute; left: 10px; right: 10px; top: 10px; z-index: 6;
       display: flex; align-items: center; justify-content: space-between; gap: 8px; pointer-events: none;
@@ -241,6 +243,12 @@
 (function() {
   "use strict";
 
+  const IS_DESKTOP_DEV = (function() {
+    const ua = (navigator && navigator.userAgent) || "";
+    const isMob = /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);
+    return !isMob;
+  })();
+
   const S = {
     apiUrl: "",
     tok: "",
@@ -257,7 +265,10 @@
     rangeFrom: 1,
     rangeTo: 24,
     camRunning: false,
-    camFacing: "environment",
+    camFacing: IS_DESKTOP_DEV ? "user" : "environment",
+    camDeviceId: "",
+    camDevices: [],
+    mirrorPreview: IS_DESKTOP_DEV,
     torchOn: false,
     autoSave: true,
     soundOn: true,
@@ -536,7 +547,7 @@
     const bin = new Uint8Array(n);
     const visited = new Uint8Array(n);
     const qx = new Int32Array(n), qy = new Int32Array(n);
-    const minArea = Math.max(14, Math.floor(n * 0.00012));
+    const minArea = Math.max(10, Math.floor(n * 0.00008));
     const maxArea = Math.floor(n * 0.038);
 
     function dist_(p, q) { return Math.hypot(p.x - q.x, p.y - q.y); }
@@ -853,6 +864,21 @@
       if (wAlt) return { canvas: wAlt, qrMeta: rawHit.qrMeta };
     }
 
+    // 노트북 웹캠/가상카메라 드라이버가 좌우반전(Mirror) 스트림을 보내는 경우 자동 정방향 복원 (4방향 미러 탐색)
+    const mirrorQuads = [
+      [quad4[1], quad4[0], quad4[3], quad4[2]], // 좌우반전 0도
+      [quad4[2], quad4[3], quad4[0], quad4[1]], // 좌우반전 180도
+      [quad4[0], quad4[2], quad4[1], quad4[3]], // 좌우반전 90도
+      [quad4[3], quad4[1], quad4[2], quad4[0]]  // 좌우반전 270도
+    ];
+    for (let mi = 0; mi < mirrorQuads.length; mi++) {
+      const wm = warpOmrToStandardCanvas_(srcCanvas, mirrorQuads[mi]);
+      if (wm) {
+        const qrm = tryDecodeQrFromWarped_(wm);
+        if (qrm) return { canvas: wm, qrMeta: qrm };
+      }
+    }
+
     // QR이 완전히 흐려 못 읽을 때만 QR 영역 고주파 체커보드 엣지 밀도로 정방향 판별 (그림자에 속지 않음)
     if (w180) {
       const e0 = measureQrEdgeDensity_(w0);
@@ -1032,25 +1058,87 @@
     if (pill) { pill.className = "cam-pill"; pill.textContent = "카메라 대기 중"; }
   };
 
+  function applyMirrorUi_() {
+    const vid = document.getElementById("camVid");
+    const ov = document.getElementById("camOv");
+    const btn = document.getElementById("btnMirror");
+    if (vid) vid.classList.toggle("mirror", Boolean(S.mirrorPreview));
+    if (ov) ov.classList.toggle("mirror", Boolean(S.mirrorPreview));
+    if (btn) {
+      btn.classList.toggle("active-opt", Boolean(S.mirrorPreview));
+      btn.textContent = S.mirrorPreview ? "🪞 거울화면 ON" : "🪞 거울화면 OFF";
+    }
+  }
+
+  async function refreshCamDevices_() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== "function") return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      S.camDevices = all.filter(function(d) { return d.kind === "videoinput"; });
+      const sel = document.getElementById("camDeviceSel");
+      if (sel) {
+        let curId = S.camDeviceId;
+        if (!curId && STREAM) {
+          try {
+            const tr = STREAM.getVideoTracks()[0];
+            const st = tr && tr.getSettings ? tr.getSettings() : {};
+            if (st && st.deviceId) curId = st.deviceId;
+          } catch (_) {}
+        }
+        sel.innerHTML = '<option value="">' + (IS_DESKTOP_DEV ? '기본 노트북·웹캠 자동' : '기본 카메라 (후면/전면)') + '</option>' +
+          S.camDevices.map(function(d, idx) {
+            const lbl = d.label || ("카메라 " + (idx + 1));
+            return '<option value="' + esc_(d.deviceId) + '"' + (curId && d.deviceId === curId ? ' selected' : '') + '>' + esc_(lbl) + '</option>';
+          }).join("");
+      }
+    } catch (_) {}
+  }
+
+  window.onChangeCamDevice_ = function(devId) {
+    S.camDeviceId = String(devId || "");
+    if (S.camRunning) startCam_();
+  };
+
+  window.toggleMirror_ = function() {
+    S.mirrorPreview = !S.mirrorPreview;
+    applyMirrorUi_();
+  };
+
   window.startCam_ = async function() {
     stopCam_();
     const pill = document.getElementById("camPill");
     if (pill) { pill.className = "cam-pill warn"; pill.textContent = "⏳ 카메라 연결 중..."; }
-    try {
-      STREAM = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: { ideal: S.camFacing }, width: { ideal: 1280 }, height: { ideal: 960 } }
-      });
-    } catch (e1) {
+
+    // 노트북/PC 웹캠은 16:9 1080p/720p 우선 (facingMode 강제 금지), 폰/태블릿은 후면 우선
+    const attempts = [];
+    if (S.camDeviceId) {
+      attempts.push({ audio: false, video: { deviceId: { exact: S.camDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+      attempts.push({ audio: false, video: { deviceId: { exact: S.camDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+      attempts.push({ audio: false, video: { deviceId: { exact: S.camDeviceId } } });
+    } else if (IS_DESKTOP_DEV) {
+      attempts.push({ audio: false, video: { width: { ideal: 1920 }, height: { ideal: 1080 } } });
+      attempts.push({ audio: false, video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
+    } else {
+      attempts.push({ audio: false, video: { facingMode: { ideal: S.camFacing }, width: { ideal: 1280 }, height: { ideal: 960 } } });
+    }
+    attempts.push({ audio: false, video: true });
+
+    let lastErr = null;
+    for (let ai = 0; ai < attempts.length; ai++) {
       try {
-        STREAM = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
-      } catch (e2) {
-        const msg = "카메라 권한이 거부되었습니다(" + (e2.name || e2.message || e2) + "). 브라우저 설정에서 카메라를 허용해주세요.";
-        if (pill) { pill.className = "cam-pill err"; pill.textContent = "⚠️ 카메라 권한 필요"; }
-        showTopToast_(msg, "warn");
-        return;
+        STREAM = await navigator.mediaDevices.getUserMedia(attempts[ai]);
+        if (STREAM) break;
+      } catch (err) {
+        lastErr = err;
       }
     }
+    if (!STREAM) {
+      const msg = "카메라를 열 수 없습니다(" + ((lastErr && (lastErr.name || lastErr.message)) || lastErr) + "). 브라우저 주소창 왼쪽 카메라 권한 허용 또는 다른 프로그램(Zoom 등) 사용 여부를 확인해주세요.";
+      if (pill) { pill.className = "cam-pill err"; pill.textContent = "⚠️ 카메라 권한/연결 확인 필요"; }
+      showTopToast_(msg, "warn");
+      return;
+    }
+
     const vid = document.getElementById("camVid");
     if (!vid) { stopCam_(); return; }
     vid.muted = true;
@@ -1066,7 +1154,14 @@
     const bar = document.getElementById("camLiveBar");
     if (cov) cov.classList.add("hidden");
     if (bar) bar.classList.add("show");
-    if (pill) { pill.className = "cam-pill ok"; pill.textContent = "📷 실시간 스캔 ON · OMR 4코너를 비춰주세요"; }
+    applyMirrorUi_();
+    refreshCamDevices_();
+    if (pill) {
+      pill.className = "cam-pill ok";
+      pill.textContent = IS_DESKTOP_DEV
+        ? "💻 노트북 카메라 ON · OMR 4코너를 비추거나 Space 키로 즉시 판독"
+        : "📷 실시간 스캔 ON · OMR 4코너를 비춰주세요";
+    }
 
     // Check torch capability
     const torchBtn = document.getElementById("btnTorch");
@@ -1090,7 +1185,7 @@
       const ov = document.getElementById("camOv");
       const pEl = document.getElementById("camPill");
       if (ov && (ov.width !== vw || ov.height !== vh)) { ov.width = vw; ov.height = vh; }
-      const targetW = 540, scale = targetW / vw, targetH = Math.round(vh * scale);
+      const targetW = IS_DESKTOP_DEV ? 600 : 540, scale = targetW / vw, targetH = Math.round(vh * scale);
       if (workCv.width !== targetW || workCv.height !== targetH) { workCv.width = targetW; workCv.height = targetH; }
       const wCtx = workCv.getContext("2d", { willReadFrequently: true });
       wCtx.drawImage(vid, 0, 0, targetW, targetH);
@@ -1114,7 +1209,7 @@
           if (STABLE_CORNERS) {
             let maxM = 0;
             for (let i = 0; i < 4; i++) maxM = Math.max(maxM, Math.hypot(qf[i].x - STABLE_CORNERS[i].x, qf[i].y - STABLE_CORNERS[i].y));
-            if (maxM < vw * 0.055) STABLE_CNT++; else STABLE_CNT = 0;
+            if (maxM < vw * 0.068) STABLE_CNT++; else STABLE_CNT = 0;
           }
           STABLE_CORNERS = qf;
           if (pEl) {
@@ -1131,7 +1226,7 @@
               if (!parsed.qrFound && !S.allowBlankQr) {
                 if (pEl) {
                   pEl.className = "cam-pill warn";
-                  pEl.textContent = "🎯 4코너 고정됨 · 우상단 QR 초점 맞추는 중... (잠시 유지)";
+                  pEl.textContent = "🎯 4코너 고정됨 · 우상단 QR 초점 맞추는 중... (조금 가까이 유지)";
                 }
                 STABLE_CNT = 2; // 다음 4프레임마다 QR 재시도
               } else {
@@ -1167,9 +1262,35 @@
   };
 
   window.flipCam_ = function() {
+    // 노트북/PC에서 카메라가 2개 이상(내장 웹캠 + 외장 USB/연속성 카메라)이면 순환 전환!
+    if (IS_DESKTOP_DEV && S.camDevices.length >= 2) {
+      let curId = S.camDeviceId;
+      if (!curId && STREAM) {
+        try { const st = STREAM.getVideoTracks()[0].getSettings(); if (st && st.deviceId) curId = st.deviceId; } catch (_) {}
+      }
+      const idx = S.camDevices.findIndex(function(d) { return d.deviceId === curId; });
+      const nextDev = S.camDevices[(idx + 1) % S.camDevices.length];
+      S.camDeviceId = nextDev.deviceId;
+      showTopToast_("카메라 전환: " + (nextDev.label || "다음 카메라"), "info");
+      if (S.camRunning) startCam_();
+      return;
+    }
+    S.camDeviceId = "";
     S.camFacing = S.camFacing === "user" ? "environment" : "user";
+    S.mirrorPreview = (S.camFacing === "user");
     if (S.camRunning) startCam_();
   };
+
+  // 노트북 키보드 단축키: 카메라 ON 상태에서 Space 키로 즉시 판독!
+  document.addEventListener("keydown", function(e) {
+    if (!S.camRunning) return;
+    if (e.code === "Space" || e.key === " ") {
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toUpperCase() : "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+      e.preventDefault();
+      snapLiveNow_();
+    }
+  });
 
   window.toggleTorch_ = async function() {
     if (!STREAM) return;
@@ -1562,23 +1683,29 @@
             '<span id="autoSavePill" class="cam-pill">' + (S.autoSave ? '⚡ 자동저장 ON' : '수동저장') + '</span>' +
           '</div>' +
           '<div id="camCover" class="cam-start-cover">' +
-            '<div style="font-size:17px; font-weight:900;">📷 iframe 없는 직통 실시간 OMR 스캐너</div>' +
-            '<div style="font-size:12.5px; color:#cbd5e1; max-width:390px; line-height:1.5;">아이패드 · 아이폰 · 갤럭시 탭 · PC 모든 기기에서 보안 차단 없이 앱 안에서 60fps 실시간 OMR 채점이 바로 작동합니다.</div>' +
+            '<div style="font-size:17px; font-weight:900;">' + (IS_DESKTOP_DEV ? '💻 노트북·웹캠 & 📱 전 기기 실시간 OMR 스캐너' : '📷 iframe 없는 직통 실시간 OMR 스캐너') + '</div>' +
+            '<div style="font-size:12.5px; color:#cbd5e1; max-width:420px; line-height:1.55;">' +
+              (IS_DESKTOP_DEV
+                ? '노트북 내장 카메라 · USB 외장 웹캠 · 실물화상기 모두 지원! 거울 화면 + 자동 좌우반전 복원 + <strong>Space 키 즉시 판독</strong>으로 편하게 채점하세요.'
+                : '아이패드 · 아이폰 · 갤럭시 탭 · 노트북 모든 기기에서 보안 차단 없이 앱 안에서 60fps 실시간 OMR 채점이 바로 작동합니다.') +
+            '</div>' +
             '<div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:4px;">' +
-              '<button type="button" class="btn em" style="padding:12px 20px; font-size:14px;" onclick="startCam_()">▶ 실시간 카메라 켜기</button>' +
+              '<button type="button" class="btn em" style="padding:12px 20px; font-size:14px;" onclick="startCam_()">' + (IS_DESKTOP_DEV ? '▶ 노트북·웹캠 카메라 켜기' : '▶ 실시간 카메라 켜기') + '</button>' +
               '<label class="btn pri" style="padding:12px 16px; font-size:13px;">🖼️ 사진 여러 장 일괄 채점<input type="file" accept="image/*" multiple style="display:none;" onchange="handleFiles_(this.files, this)"></label>' +
             '</div>' +
           '</div>' +
           '<div id="camBanner" class="cam-banner"></div>' +
           '<div id="camLiveBar" class="cam-live-bar">' +
-            '<button type="button" class="cam-fab snap" onclick="snapLiveNow_()">📸 지금 즉시 판독</button>' +
-            '<button type="button" class="cam-fab" onclick="flipCam_()">🔄 전/후면 전환</button>' +
+            '<button type="button" class="cam-fab snap" onclick="snapLiveNow_()">' + (IS_DESKTOP_DEV ? '📸 즉시 판독 (Space)' : '📸 지금 즉시 판독') + '</button>' +
+            '<button type="button" id="btnMirror" class="cam-fab' + (S.mirrorPreview ? ' active-opt' : '') + '" onclick="toggleMirror_()" title="노트북 전면 웹캠에서 종이 맞추기 편하도록 화면만 거울처럼 보여줍니다(인식은 정방향)">' + (S.mirrorPreview ? '🪞 거울화면 ON' : '🪞 거울화면 OFF') + '</button>' +
+            '<button type="button" class="cam-fab" onclick="flipCam_()">' + (IS_DESKTOP_DEV ? '🔄 카메라 전환' : '🔄 전/후면 전환') + '</button>' +
             '<button type="button" id="btnTorch" class="cam-fab" style="display:none;" onclick="toggleTorch_()">🔦 손전등</button>' +
             '<button type="button" class="cam-fab stop" onclick="stopCam_()">■ 끄기</button>' +
           '</div>' +
         '</div>' +
         '<div class="cam-opts">' +
-          '<div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">' +
+          '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">' +
+            '<select id="camDeviceSel" class="sel" style="max-width:210px;" onchange="onChangeCamDevice_(this.value)" title="노트북 내장 카메라 · USB 외장 웹캠 · 실물화상기 선택"><option value="">' + (IS_DESKTOP_DEV ? '기본 노트북·웹캠 자동' : '기본 카메라 (후면/전면)') + '</option></select>' +
             '<label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" ' + (S.autoSave ? 'checked' : '') + ' onchange="S_SET_(\'autoSave\', this.checked)"> 스캔 즉시 출석부 자동저장</label>' +
             '<label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" ' + (S.soundOn ? 'checked' : '') + ' onchange="S_SET_(\'soundOn\', this.checked)"> "띠릭!" 효과음</label>' +
             '<label style="display:inline-flex; align-items:center; gap:5px; color:#94a3b8;" title="체크 해제 시 QR이 안 읽히면 오저장을 자동 차단합니다"><input type="checkbox" ' + (S.allowBlankQr ? 'checked' : '') + ' onchange="S_SET_(\'allowBlankQr\', this.checked)"> QR 없는 공용 OMR 허용</label>' +
@@ -1599,6 +1726,8 @@
         '</div>' +
       '</div>' +
       '<div id="rightPanel" class="panel"></div>';
+    applyMirrorUi_();
+    refreshCamDevices_();
     renderRight_();
   }
 
