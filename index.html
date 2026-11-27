@@ -493,7 +493,17 @@
     if (/\(\d+(?:-\d+)?\)/.test(c0)) {
       const splitS = function(str) { return String(str || "").split(/\(\d+(?:-\d+)?\)/).map(function(v) { return v.trim(); }).filter(Boolean); };
       const cS = splitS(c0);
-      const sS = /\(\d+(?:-\d+)?\)/.test(s0) ? splitS(s0) : s0.split(/[,;]+/).map(function(v) { return v.trim(); }).filter(Boolean);
+      const splitTopC_ = function(str) {
+        const res = []; let cur = "", d = 0;
+        for (let i = 0; i < str.length; i++) {
+          const ch = str[i];
+          if (ch === "(") d++; else if (ch === ")" && d > 0) d--;
+          if ((ch === "," || ch === ";") && d === 0) { if (cur.trim()) res.push(cur.trim()); cur = ""; } else cur += ch;
+        }
+        if (cur.trim()) res.push(cur.trim());
+        return res;
+      };
+      const sS = /\(\d+(?:-\d+)?\)/.test(s0) ? splitS(s0) : splitTopC_(s0);
       if (cS.length >= 2 && sS.length === cS.length) {
         let ok = true;
         for (let i = 0; i < cS.length; i++) { if (!atomsEq_(sS[i], cS[i])) { ok = false; break; } }
@@ -527,24 +537,32 @@
     const ranges = Array.isArray(rangesOrFrom)
       ? rangesOrFrom
       : ((rangesOrFrom && toNo) ? [[rangesOrFrom, toNo]] : null);
-    let rangeCount = 0, solved = 0, correct = 0, wrong = 0;
+    let rangeCount = 0, solved = 0, correct = 0, wrong = 0, subjTotal = 0, subjSolved = 0;
+    const ungradedSubjNos = [];
     const perItem = [];
     items.forEach(function(it) {
       if (ranges && !isInRanges_(it.n, ranges)) return;
       rangeCount++;
+      if (it.t === "subj") subjTotal++;
       const stuText = it.t === "subj" ? String(mapObj["t_" + it.n] || "").trim() : "";
       let stu = normAns_(mapObj[String(it.n)], it.t);
       if (it.t === "subj" && stu && stu !== "O" && stu !== "△" && stu !== "X") {
         stu = matchSubjShortAns_(stu, it.a) ? "O" : "X";
       }
-      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: "", stuText: stuText, status: "blank" }); return; }
+      if (!stu) {
+        if (it.t === "subj") ungradedSubjNos.push(it.n);
+        perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: "", stuText: stuText, status: "blank" });
+        return;
+      }
       solved++;
+      if (it.t === "subj") subjSolved++;
       const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
       if (isOk) correct++; else wrong++;
       perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: stu, stuText: stuText, status: isOk ? "ok" : "bad" });
     });
+    const ungradedSubj = Math.max(0, subjTotal - subjSolved);
     const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
-    return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
+    return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, subjTotal: subjTotal, subjSolved: subjSolved, ungradedSubj: ungradedSubj, ungradedSubjNos: ungradedSubjNos, acc: acc, perItem: perItem };
   }
 
   function getWrongSetVirtualItems_(setId) {
@@ -564,24 +582,32 @@
     const ranges = Array.isArray(rangesOrFrom)
       ? rangesOrFrom
       : ((rangesOrFrom && toNo) ? [[rangesOrFrom, toNo]] : null);
-    let rangeCount = 0, solved = 0, correct = 0, wrong = 0;
+    let rangeCount = 0, solved = 0, correct = 0, wrong = 0, subjTotal = 0, subjSolved = 0;
+    const ungradedSubjNos = [];
     const perItem = [];
     items.forEach(function(it) {
       if (ranges && !isInRanges_(it.n, ranges)) return;
       rangeCount++;
+      if (it.t === "subj") subjTotal++;
       const stuText = it.t === "subj" ? String(mapObj["t_" + it.n] || "").trim() : "";
       let stu = normAns_(mapObj[String(it.n)], it.t);
       if (it.t === "subj" && stu && stu !== "O" && stu !== "△" && stu !== "X") {
         stu = matchSubjShortAns_(stu, it.a) ? "O" : "X";
       }
-      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: "", stuText: stuText, status: "blank", origLbl: it.origLbl }); return; }
+      if (!stu) {
+        if (it.t === "subj") ungradedSubjNos.push(it.n);
+        perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: "", stuText: stuText, status: "blank", origLbl: it.origLbl });
+        return;
+      }
       solved++;
+      if (it.t === "subj") subjSolved++;
       const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
       if (isOk) correct++; else wrong++;
       perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: stu, stuText: stuText, status: isOk ? "ok" : "bad", origLbl: it.origLbl });
     });
+    const ungradedSubj = Math.max(0, subjTotal - subjSolved);
     const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
-    return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
+    return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, subjTotal: subjTotal, subjSolved: subjSolved, ungradedSubj: ungradedSubj, ungradedSubjNos: ungradedSubjNos, acc: acc, perItem: perItem };
   }
 
   function filterAnsToRanges_(amap, ranges) {
@@ -1137,20 +1163,50 @@
         const sy = Math.max(0, Math.round(cy - halfH));
         const sh = Math.min(OMR_H - sy, halfH * 2);
         subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 2);
-        subjPendingNos.push(it.n);
-        pCtx.save();
-        pCtx.strokeStyle = "#6366f1";
-        pCtx.lineWidth = 2.5;
-        pCtx.setLineDash([6, 4]);
-        pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
-        pCtx.fillStyle = "rgba(99,102,241,0.10)";
-        pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
-        pCtx.setLineDash([]);
-        pCtx.fillStyle = "#4f46e5";
-        pCtx.font = "800 11px sans-serif";
-        pCtx.textAlign = "right";
-        pCtx.fillText("✍️단답", sx + sw - 6, sy + 13);
-        pCtx.restore();
+
+        const pLumS = Math.max(75, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
+        const sSc = [];
+        for (let b = 0; b < 3; b++) sSc.push({ b: b, bx: OMR_COL_X[col][b], sc: measureDark_(OMR_COL_X[col][b], cy, innerRad, pLumS) });
+        const sSort = sSc.slice().sort(function(a, b) { return b.sc - a.sc; });
+        let outD = 0, outT = 0;
+        const outTh = Math.min(185, pLumS - 42), lx0 = OMR_COL_X[col][3] + 4, lx1 = OMR_COL_X[col][3] + 46;
+        const br2 = (spec.radius + 3.5) * (spec.radius + 3.5);
+        for (let y = sy + 3; y < sy + sh - 3; y += 2) {
+          const ro = y * OMR_W;
+          for (let x = sx + 4; x < sx + sw - 4; x += 2) {
+            let inB = false;
+            for (let b = 0; b < 3; b++) { const dx = x - OMR_COL_X[col][b], dy = y - cy; if (dx * dx + dy * dy <= br2) { inB = true; break; } }
+            if (inB || (x >= lx0 && x <= lx1 && Math.abs(y - cy) <= 9)) continue;
+            const p = (ro + x) * 4;
+            if (((fullImg[p] * 77 + fullImg[p + 1] * 150 + fullImg[p + 2] * 29) >> 8) < outTh) outD++;
+            outT++;
+          }
+        }
+        const isCleanBub = (sSort[0].sc >= 0.45 && (sSort[0].sc - sSort[1].sc) >= 0.22 && (outT ? outD / outT : 0) < 0.032);
+        if (isCleanBub) {
+          const lv = ["O", "△", "X"][sSort[0].b] || "X";
+          answers[String(it.n)] = lv;
+          pCtx.beginPath();
+          pCtx.arc(sSort[0].bx, cy, spec.radius + 3, 0, Math.PI * 2);
+          pCtx.strokeStyle = lv === "O" ? "#10b981" : "#ef4444";
+          pCtx.lineWidth = 3.5;
+          pCtx.stroke();
+        } else {
+          subjPendingNos.push(it.n);
+          pCtx.save();
+          pCtx.strokeStyle = "#6366f1";
+          pCtx.lineWidth = 2.5;
+          pCtx.setLineDash([6, 4]);
+          pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
+          pCtx.fillStyle = "rgba(99,102,241,0.10)";
+          pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+          pCtx.setLineDash([]);
+          pCtx.fillStyle = "#4f46e5";
+          pCtx.font = "800 11px sans-serif";
+          pCtx.textAlign = "right";
+          pCtx.fillText("✍️단답", sx + sw - 6, sy + 13);
+          pCtx.restore();
+        }
         continue;
       }
       const optCnt = 5;
@@ -1665,6 +1721,19 @@
     const stu = getStu_(item.erpId);
     if (!stu) { showTopToast_("학생을 먼저 선택해주세요.", "warn"); return; }
     const ranges = (Array.isArray(item.ranges) && item.ranges.length) ? item.ranges : [[item.fromNo, item.toNo]];
+    if (!silent) {
+      const preG = item.isWrongRetest ? gradeWrongSetLocal_(item.wrongSetId, item.answers, ranges) : gradeLocal_(item.secKey, item.answers, ranges);
+      if (preG.ungradedSubj > 0 && preG.solved > 0) {
+        const okX = window.confirm(
+          "⚠️ 서술형 " + preG.ungradedSubjNos.join(", ") + "번(" + preG.ungradedSubj + "문항)이 아직 채점되지 않았습니다!\n"
+          + "• [확인] → 미채점 서술형을 오답(X)으로 포함해 " + (preG.solved + preG.ungradedSubj) + "문항 전체로 저장\n"
+          + "• [취소] → 저장 중단 후 서술형 먼저 채점"
+        );
+        if (!okX) return;
+        preG.ungradedSubjNos.forEach(function(sn) { item.answers[String(sn)] = "X"; });
+        item.subjPendingNos = [];
+      }
+    }
 
     // 🎯 오답노트 재채점 OMR 저장 경로
     if (item.isWrongRetest && item.wrongSetId) {
@@ -2048,14 +2117,15 @@
         const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
         const g = q.isWrongRetest ? gradeWrongSetLocal_(q.wrongSetId, q.answers, rgs) : gradeLocal_(q.secKey, q.answers, rgs);
         q.graded = g;
-        const hasPend = Array.isArray(q.subjPendingNos) && q.subjPendingNos.length > 0;
-        const stTxt = q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (hasPend ? ('✍️ 서술형 ' + q.subjPendingNos.length + '문항 확인') : (q.saved ? (q.isWrongRetest ? '✓ 오답해결 반영' : '✓ 출석부 저장됨') : '● 미저장')));
+        const hasPend = (Array.isArray(q.subjPendingNos) && q.subjPendingNos.length > 0) || g.ungradedSubj > 0;
+        const qDenom = (g.ungradedSubj > 0 && (g.solved + g.ungradedSubj) >= g.rangeCount) ? g.rangeCount : g.solved;
+        const stTxt = q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (hasPend ? ('✍️ 서술형 ' + Math.max(g.ungradedSubj, (q.subjPendingNos || []).length) + '문항 미채점') : (q.saved ? (q.isWrongRetest ? '✓ 오답해결 반영' : '✓ 출석부 저장됨') : '● 미저장')));
         const stClr = q.qrMissing ? '#f87171' : (hasPend ? '#a5b4fc' : (q.saved ? '#34d399' : '#fbbf24'));
         h += '<div class="q-item ' + (act && act.id === q.id ? 'sel ' : '') + (q.saved ? 'saved' : 'unsaved') + '" onclick="selQ_(\'' + esc_(q.id) + '\')">' +
           '<div><div style="font-size:13px; font-weight:800; color:' + (q.isWrongRetest ? '#c4b5fd' : '#f8fafc') + ';">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
           '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + esc_(formatRanges_(rgs)) + '번</div></div>' +
           '<div style="display:flex; align-items:center; gap:7px;">' +
-            '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + (q.isWrongRetest ? '해결 ' : '') + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
+            '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + (q.isWrongRetest ? '해결 ' : '') + g.correct + '/' + qDenom + (g.ungradedSubj > 0 ? ' (서술형대기)' : (' (' + g.acc + '%)')) + '</div>' +
             '<div style="font-size:10.5px; color:' + stClr + ';">' + stTxt + '</div></div>' +
             '<button type="button" class="btn sm" style="padding:4px 7px; background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.45); color:#fecaca;" title="저장된 기록 및 출석부 진도 삭제" onclick="event.stopPropagation(); deleteItem_(\'' + esc_(q.id) + '\')">🗑️</button>' +
           '</div>' +
@@ -2073,7 +2143,7 @@
         (act.qrMissing ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(239,68,68,0.18); border:1px solid rgba(248,113,113,0.45); font-size:11.5px; font-weight:800; color:#fecaca;">⚠️ QR 코드가 읽히지 않아 오저장을 자동 차단했습니다. 아래에서 학생·교재를 직접 고른 뒤 [💾 저장]하거나 다시 스캔해 주세요.</div>' : (act.isWrongRetest ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(124,58,237,0.22); border:1px solid rgba(196,181,253,0.45); font-size:11.5px; font-weight:800; color:#ede9fe;">🎯 오답 재채점 모드 — 맞춘 문항은 원래 교재 파트에서 자동 해결되며, 남은 오답만 다음 오답노트에 포함됩니다.</div>' : '')) +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
           '<div><div style="font-size:13.5px; font-weight:900;">🔍 ' + esc_(act.name) + ' · ' + esc_(rngTxt) + '번</div>' +
-          '<div style="font-size:11.5px; color:#cbd5e1; margin-top:2px;">' + (act.isWrongRetest ? '해결 ' : '맞음 ') + '<strong style="color:#34d399;">' + g.correct + '</strong> · ' + (act.isWrongRetest ? '재오답 ' : '틀림 ') + '<strong style="color:#f87171;">' + g.wrong + '</strong> · 정답률 <strong style="color:#38bdf8;">' + g.acc + '%</strong></div></div>' +
+          '<div style="font-size:11.5px; color:#cbd5e1; margin-top:2px;">' + (act.isWrongRetest ? '해결 ' : '맞음 ') + '<strong style="color:#34d399;">' + g.correct + '</strong> · ' + (act.isWrongRetest ? '재오답 ' : '틀림 ') + '<strong style="color:#f87171;">' + g.wrong + '</strong> · 채점 ' + g.solved + '/' + g.rangeCount + (g.subjTotal > 0 ? (' (객' + (g.rangeCount - g.subjTotal) + '+서' + g.subjTotal + ')') : '') + (g.ungradedSubj > 0 ? (' · <strong style="color:#fbbf24;">⚠️서술형 ' + g.ungradedSubj + ' 미채점</strong>') : (' · 정답률 <strong style="color:#38bdf8;">' + g.acc + '%</strong>')) + '</div></div>' +
           '<div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;">' +
             '<select class="sel" style="height:28px; max-width:130px;" onchange="reassignStu_(\'' + esc_(act.id) + '\', this.value)">' +
               '<option value="">-- 학생 선택 --</option>' +
