@@ -258,6 +258,7 @@
     torchOn: false,
     autoSave: true,
     soundOn: true,
+    allowBlankQr: false,
     queue: [],
     activeId: ""
   };
@@ -324,7 +325,57 @@
     return S.sections.find(function(x) { return x.key === k; }) || { key: k, shortLbl: k, title: k, count: 20 };
   }
   function getStu_(id) {
-    return S.students.find(function(x) { return x.erpId === id; }) || null;
+    const clean = String(id == null ? "" : id).trim();
+    if (!clean) return null;
+    return S.students.find(function(x) { return String(x.erpId || "").trim() === clean; }) || null;
+  }
+
+  function buildRangesFromCheckedNos_(checkedNos, cardFrom, cardTo) {
+    if (!checkedNos || !checkedNos.length) return [[cardFrom, cardTo]];
+    const sorted = checkedNos.slice().sort(function(a, b) { return a - b; });
+    if (sorted.length === 1) {
+      return sorted[0] > cardFrom ? [[cardFrom, sorted[0]]] : [[cardFrom, cardTo]];
+    }
+    const out = [];
+    for (let i = 0; i < sorted.length; i += 2) {
+      if (i + 1 < sorted.length) out.push([sorted[i], sorted[i + 1]]);
+      else out.push([sorted[i], cardTo]);
+    }
+    return out;
+  }
+
+  function parseRangesText_(txt, maxN, defFrom, defTo) {
+    const s = String(txt || "").trim();
+    const cap = maxN || 999;
+    if (!s) return [[defFrom || 1, defTo || cap]];
+    const parts = s.split(/[,;/]+/).map(function(x) { return x.trim(); }).filter(Boolean);
+    const out = [];
+    parts.forEach(function(part) {
+      const m = part.match(/^(\d+)\s*[-~]\s*(\d+)$/);
+      if (m) {
+        const a = Math.max(1, Math.min(cap, Number(m[1])));
+        const b = Math.max(a, Math.min(cap, Number(m[2])));
+        out.push([a, b]);
+      } else if (/^\d+$/.test(part)) {
+        const n = Math.max(1, Math.min(cap, Number(part)));
+        out.push([n, n]);
+      }
+    });
+    return out.length ? out : [[defFrom || 1, defTo || cap]];
+  }
+
+  function formatRanges_(ranges) {
+    return (ranges || []).map(function(r) {
+      return r[0] === r[1] ? String(r[0]) : (r[0] + "~" + r[1]);
+    }).join(", ");
+  }
+
+  function isInRanges_(n, ranges) {
+    if (!ranges || !ranges.length) return true;
+    for (let i = 0; i < ranges.length; i++) {
+      if (n >= ranges[i][0] && n <= ranges[i][1]) return true;
+    }
+    return false;
   }
 
   function normAns_(raw, qType) {
@@ -345,12 +396,15 @@
     return uniq.join(",");
   }
 
-  function gradeLocal_(secKey, amap, fromNo, toNo) {
+  function gradeLocal_(secKey, amap, rangesOrFrom, toNo) {
     const items = S.itemsBySec[secKey] || [];
+    const ranges = Array.isArray(rangesOrFrom)
+      ? rangesOrFrom
+      : ((rangesOrFrom && toNo) ? [[rangesOrFrom, toNo]] : null);
     let rangeCount = 0, solved = 0, correct = 0, wrong = 0;
     const perItem = [];
     items.forEach(function(it) {
-      if (fromNo && toNo && (it.n < fromNo || it.n > toNo)) return;
+      if (ranges && !isInRanges_(it.n, ranges)) return;
       rangeCount++;
       const stu = normAns_((amap || {})[String(it.n)], it.t);
       if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, stu: "", status: "blank" }); return; }
@@ -363,11 +417,11 @@
     return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
   }
 
-  function filterAnsToRange_(amap, f, t) {
+  function filterAnsToRanges_(amap, ranges) {
     const out = {};
     Object.keys(amap || {}).forEach(function(k) {
       const n = Number(k);
-      if (n >= f && n <= t && amap[k]) out[String(n)] = amap[k];
+      if (isInRanges_(n, ranges) && amap[k]) out[String(n)] = amap[k];
     });
     return out;
   }
@@ -466,7 +520,16 @@
           const aspect = bw / bh;
           if (aspect < 0.45 || aspect > 2.2) continue;
           const fill = area / (bw * bh);
-          if (fill < 0.52) continue;
+          if (fill < 0.56) continue;
+          // 속이 빈 QR 파인더 패턴(내부 70% 채움 ~0.36) 제외, 꽉 찬 코너 마커(~0.95)만 통과
+          const inX0 = minX + Math.floor(bw * 0.16), inX1 = maxX - Math.floor(bw * 0.16);
+          const inY0 = minY + Math.floor(bh * 0.16), inY1 = maxY - Math.floor(bh * 0.16);
+          let inDark = 0, inTot = 0;
+          for (let iy = inY0; iy <= inY1; iy++) {
+            const ro = iy * w;
+            for (let ix = inX0; ix <= inX1; ix++) { inTot++; inDark += bin[ro + ix]; }
+          }
+          if (inTot > 0 && (inDark / inTot) < 0.68) continue;
           const pad = Math.max(2, Math.round(Math.min(bw, bh) * 0.3));
           let borderDark = 0, borderTot = 0;
           const bx0 = minX - pad, bx1 = maxX + pad, by0 = minY - pad, by1 = maxY + pad;
@@ -564,59 +627,183 @@
     return dstCv;
   }
 
+  function parseOmrQrPayload_(rawStr) {
+    if (!rawStr || rawStr.indexOf("CMSOMR|") !== 0) return null;
+    const parts = rawStr.split("|");
+    if (parts.length < 6) return null;
+    return {
+      erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
+      isBlankCard: parts[2] === "BLANK",
+      secKey: String(parts[3] || "").trim(),
+      fromNo: Number(parts[4]) || 1,
+      toNo: Number(parts[5]) || 20,
+      layout: Number(parts[6]) || 30
+    };
+  }
+
+  // 코너 마커(x:732..776)를 완전히 제외한 순수 QR 영역(x:560..726, y:20..188) 다중 강화 해독
+  function tryDecodeQrFromWarped_(cv) {
+    if (typeof window.jsQR !== "function") return null;
+    const sx = 560, sy = 20, sw = 166, sh = 168;
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    // Pass 1: 원본 깨끗한 크롭
+    try {
+      const img1 = ctx.getImageData(sx, sy, sw, sh);
+      const r1 = window.jsQR(img1.data, sw, sh, { inversionAttempts: "attemptBoth" });
+      const p1 = r1 && parseOmrQrPayload_(r1.data);
+      if (p1) return p1;
+    } catch (_) {}
+    // Pass 2 & 3: 2배 확대 + 명암 자동 스트레칭 + Otsu 이진화 (흐림·저대비·그림자 구출)
+    try {
+      const up = document.createElement("canvas");
+      const uw = sw * 2, uh = sh * 2;
+      up.width = uw; up.height = uh;
+      const uCtx = up.getContext("2d", { willReadFrequently: true });
+      uCtx.imageSmoothingEnabled = true;
+      uCtx.drawImage(cv, sx, sy, sw, sh, 0, 0, uw, uh);
+      const img2 = uCtx.getImageData(0, 0, uw, uh);
+      const d = img2.data;
+      const grays = new Uint8Array(uw * uh);
+      const hist = new Uint32Array(256);
+      for (let i = 0, p = 0; i < grays.length; i++, p += 4) {
+        const g = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
+        grays[i] = g; hist[g]++;
+      }
+      const tot = grays.length;
+      let acc = 0, lo = 0, hi = 255;
+      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= tot * 0.04) { lo = v; break; } }
+      acc = 0;
+      for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= tot * 0.04) { hi = v; break; } }
+      const span = Math.max(20, hi - lo);
+      for (let i = 0, p = 0; i < grays.length; i++, p += 4) {
+        const st = Math.max(0, Math.min(255, Math.round((grays[i] - lo) * 255 / span)));
+        d[p] = d[p + 1] = d[p + 2] = st; d[p + 3] = 255;
+      }
+      const r2 = window.jsQR(d, uw, uh, { inversionAttempts: "attemptBoth" });
+      const p2 = r2 && parseOmrQrPayload_(r2.data);
+      if (p2) return p2;
+
+      // Otsu 이진화
+      let sumAll = 0;
+      for (let v = 0; v < 256; v++) sumAll += v * hist[v];
+      let sumB = 0, wB = 0, bestVar = -1, bestT = 128;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t]; if (!wB) continue;
+        const wF = tot - wB; if (!wF) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+        const vb = wB * wF * (mB - mF) * (mB - mF);
+        if (vb > bestVar) { bestVar = vb; bestT = t; }
+      }
+      for (let i = 0, p = 0; i < grays.length; i++, p += 4) {
+        const bw = grays[i] < bestT ? 0 : 255;
+        d[p] = d[p + 1] = d[p + 2] = bw; d[p + 3] = 255;
+      }
+      const r3 = window.jsQR(d, uw, uh, { inversionAttempts: "attemptBoth" });
+      const p3 = r3 && parseOmrQrPayload_(r3.data);
+      if (p3) return p3;
+    } catch (_) {}
+    return null;
+  }
+
+  // 원근변환 전 원본 고해상도 프레임에서 직접 QR 탐지 + 4코너 위치로 100% 정확한 정방향 확정
+  function tryDecodeQrFromRawSrc_(srcCanvas, quad4) {
+    if (typeof window.jsQR !== "function") return null;
+    try {
+      const sw = srcCanvas.width, sh = srcCanvas.height;
+      const maxDim = Math.max(sw, sh);
+      const sc = Math.min(1, 960 / maxDim);
+      const tw = Math.round(sw * sc), th = Math.round(sh * sc);
+      const tmp = document.createElement("canvas");
+      tmp.width = tw; tmp.height = th;
+      const tCtx = tmp.getContext("2d", { willReadFrequently: true });
+      tCtx.drawImage(srcCanvas, 0, 0, tw, th);
+      const img = tCtx.getImageData(0, 0, tw, th);
+      const r = window.jsQR(img.data, tw, th, { inversionAttempts: "attemptBoth" });
+      const parsed = r && parseOmrQrPayload_(r.data);
+      if (parsed && r.location) {
+        const loc = r.location;
+        const qcx = ((loc.topLeftCorner.x + loc.topRightCorner.x + loc.bottomLeftCorner.x + loc.bottomRightCorner.x) / 4) / sc;
+        const qcy = ((loc.topLeftCorner.y + loc.topRightCorner.y + loc.bottomLeftCorner.y + loc.bottomRightCorner.y) / 4) / sc;
+        let bestIdx = 1, bestD = 1e18;
+        for (let i = 0; i < 4; i++) {
+          const d = Math.hypot(quad4[i].x - qcx, quad4[i].y - qcy);
+          if (d < bestD) { bestD = d; bestIdx = i; }
+        }
+        return { qrMeta: parsed, trIdx: bestIdx };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function measureQrEdgeDensity_(cv) {
+    // 그림자가 아닌 QR 특유의 고주파 흑백 교차(체커보드) 밀도 측정
+    const img = cv.getContext("2d", { willReadFrequently: true }).getImageData(572, 32, 144, 144);
+    const d = img.data, w = 144, h = 144;
+    let edges = 0;
+    for (let y = 2; y < h - 2; y += 2) {
+      for (let x = 2; x < w - 2; x += 2) {
+        const p = (y * w + x) * 4;
+        const l0 = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
+        const pR = p + 8, pD = p + w * 8;
+        const lR = (d[pR] * 77 + d[pR + 1] * 150 + d[pR + 2] * 29) >> 8;
+        const lD = (d[pD] * 77 + d[pD + 1] * 150 + d[pD + 2] * 29) >> 8;
+        if (Math.abs(l0 - lR) > 36) edges++;
+        if (Math.abs(l0 - lD) > 36) edges++;
+      }
+    }
+    return edges;
+  }
+
   function warpAndOrientOmrCanvas_(srcCanvas, quad4) {
     const w0 = warpOmrToStandardCanvas_(srcCanvas, quad4);
     if (!w0) return null;
-    function checkTopRight_(cv) {
-      const qrImg = cv.getContext("2d", { willReadFrequently: true }).getImageData(548, 12, 200, 196);
-      let qrHit = false;
-      if (typeof window.jsQR === "function") {
-        try {
-          const r = window.jsQR(qrImg.data, qrImg.width, qrImg.height, { inversionAttempts: "attemptBoth" });
-          if (r && r.data && r.data.indexOf("CMSOMR|") === 0) qrHit = true;
-        } catch (_) {}
-      }
-      let dark = 0, tot = 0, dd = qrImg.data;
-      for (let i = 0; i < dd.length; i += 16) { if (((dd[i]*77 + dd[i+1]*150 + dd[i+2]*29) >> 8) < 130) dark++; tot++; }
-      return { qrHit: qrHit, darkRatio: tot ? dark / tot : 0 };
-    }
-    const s0 = checkTopRight_(w0);
-    if (s0.qrHit) return w0;
-    const w180 = warpOmrToStandardCanvas_(srcCanvas, [quad4[3], quad4[2], quad4[1], quad4[0]]);
+    const qr0 = tryDecodeQrFromWarped_(w0);
+    if (qr0) return { canvas: w0, qrMeta: qr0 };
+
+    // 180도 회전 확인
+    const quad180 = [quad4[3], quad4[2], quad4[1], quad4[0]];
+    const w180 = warpOmrToStandardCanvas_(srcCanvas, quad180);
     if (w180) {
-      const s180 = checkTopRight_(w180);
-      if (s180.qrHit || s180.darkRatio > s0.darkRatio + 0.08) return w180;
+      const qr180 = tryDecodeQrFromWarped_(w180);
+      if (qr180) return { canvas: w180, qrMeta: qr180 };
     }
-    return w0;
+
+    // 원근변환 전 원본 고해상도 이미지에서 직접 QR 해독 → QR이 가장 가까운 코너를 TR로 100% 확정!
+    const rawHit = tryDecodeQrFromRawSrc_(srcCanvas, quad4);
+    if (rawHit) {
+      if (rawHit.trIdx === 1) return { canvas: w0, qrMeta: rawHit.qrMeta };
+      if (rawHit.trIdx === 2 && w180) return { canvas: w180, qrMeta: rawHit.qrMeta };
+      const qAlt = rawHit.trIdx === 0
+        ? [quad4[2], quad4[0], quad4[3], quad4[1]]
+        : [quad4[1], quad4[3], quad4[0], quad4[2]];
+      const wAlt = warpOmrToStandardCanvas_(srcCanvas, qAlt);
+      if (wAlt) return { canvas: wAlt, qrMeta: rawHit.qrMeta };
+    }
+
+    // QR이 완전히 흐려 못 읽을 때만 QR 영역 고주파 체커보드 엣지 밀도로 정방향 판별 (그림자에 속지 않음)
+    if (w180) {
+      const e0 = measureQrEdgeDensity_(w0);
+      const e180 = measureQrEdgeDensity_(w180);
+      if (e180 > e0 * 1.45 && e180 > 180) return { canvas: w180, qrMeta: null };
+    }
+    return { canvas: w0, qrMeta: null };
   }
 
-  function readWarpedOmrCanvas_(warpedCanvas) {
+  function readWarpedOmrCanvas_(warpedPack) {
+    const warpedCanvas = warpedPack && warpedPack.canvas ? warpedPack.canvas : warpedPack;
     const ctx = warpedCanvas.getContext("2d", { willReadFrequently: true });
-    let qrMeta = null;
-    if (typeof window.jsQR === "function") {
-      try {
-        const qrImg = ctx.getImageData(548, 12, 200, 196);
-        const r = window.jsQR(qrImg.data, qrImg.width, qrImg.height, { inversionAttempts: "attemptBoth" });
-        if (r && r.data && r.data.indexOf("CMSOMR|") === 0) {
-          const parts = r.data.split("|");
-          if (parts.length >= 6) {
-            qrMeta = {
-              erpId: parts[2] === "BLANK" ? "" : parts[2],
-              secKey: parts[3],
-              fromNo: Number(parts[4]) || 1,
-              toNo: Number(parts[5]) || 20,
-              layout: Number(parts[6]) || 30
-            };
-          }
-        }
-      } catch (_) {}
-    }
+    let qrMeta = (warpedPack && warpedPack.qrMeta) || tryDecodeQrFromWarped_(warpedCanvas);
 
+    const qrFound = Boolean(qrMeta);
     const secKey = (qrMeta && qrMeta.secKey && S.itemsBySec[qrMeta.secKey]) ? qrMeta.secKey : S.selSecKey;
     const secItemsAll = S.itemsBySec[secKey] || [];
     const fromNo = qrMeta ? qrMeta.fromNo : (S.rangeFrom || 1);
     const toNo = qrMeta ? qrMeta.toNo : (S.rangeTo || secItemsAll.length || 20);
-    const erpId = (qrMeta && qrMeta.erpId) ? qrMeta.erpId : S.selStudentId;
+    // QR이 읽혔으면 QR 학생 ID만 사용(없으면 빈칸), QR 미인식 시 공용모드일 때만 기본 학생 사용
+    const erpId = qrMeta
+      ? (qrMeta.erpId || "")
+      : (S.allowBlankQr ? S.selStudentId : "");
 
     const rangeItems = secItemsAll.filter(function(it) { return it.n >= fromNo && it.n <= toNo; });
     const count = rangeItems.length || Math.max(1, toNo - fromNo + 1);
@@ -667,21 +854,24 @@
     pCtx.drawImage(warpedCanvas, 0, 0);
 
     const totalSlots = Math.min(spec.perCol * 2, rangeItems.length);
-    // [□ 구간] 체크박스 판독
+    // [□ 구간] 다중 구간 체크박스 판독 (예: 11·20 → 11~20번 / 11·20·25·34 → 11~20번, 25~34번)
     const rangeRad = spec.is50 ? 5.2 : 6.8;
     const rangeSamples = [];
     for (let idx = 0; idx < totalSlots; idx++) {
       const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
       const cy = spec.startY + row * spec.stepY, rx = OMR_RANGE_COL_X[col];
-      const paperLum = Math.max(150, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
+      const paperLum = Math.max(75, (sampleLum_(rx - 14, cy, 3) + sampleLum_(OMR_COL_X[col][0] + 24, cy, 4)) / 2);
       rangeSamples.push({ n: it.n, rx: rx, cy: cy, sc: measureDark_(rx, cy, rangeRad, paperLum) });
     }
     const rSorted = rangeSamples.map(function(x) { return x.sc; }).sort(function(a, b) { return a - b; });
     const rBase = rSorted.length ? rSorted[Math.floor(rSorted.length * 0.25)] : 0;
     const rangeChecked = rangeSamples.filter(function(s) { return (s.sc - rBase) >= 0.22 && s.sc >= 0.30; });
-    let effFromNo = fromNo, effToNo = toNo, rangeMarked = false;
-    if (rangeChecked.length >= 2) { effFromNo = rangeChecked[0].n; effToNo = rangeChecked[rangeChecked.length - 1].n; rangeMarked = true; }
-    else if (rangeChecked.length === 1 && rangeItems.length > 1 && rangeChecked[0].n > rangeItems[0].n) { effToNo = rangeChecked[0].n; rangeMarked = true; }
+    const rangeMarked = rangeChecked.length >= 2 || (rangeChecked.length === 1 && rangeItems.length > 1 && rangeChecked[0].n > rangeItems[0].n);
+    const ranges = rangeMarked
+      ? buildRangesFromCheckedNos_(rangeChecked.map(function(r) { return r.n; }), fromNo, toNo)
+      : [[fromNo, toNo]];
+    const effFromNo = ranges[0][0];
+    const effToNo = ranges[ranges.length - 1][1];
     if (rangeMarked) {
       const bh = spec.is50 ? 9 : 11;
       rangeChecked.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - bh, rc.cy - bh, bh * 2, bh * 2); });
@@ -693,13 +883,13 @@
     for (let idx = 0; idx < totalSlots; idx++) {
       const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
       const cy = spec.startY + row * spec.stepY;
-      if (it.n < effFromNo || it.n > effToNo) {
+      if (!isInRanges_(it.n, ranges)) {
         pCtx.fillStyle = "rgba(148,163,184,0.28)";
         pCtx.fillRect(col === 0 ? 72 : 416, cy - spec.stepY / 2 + 2, 314, spec.stepY - 4);
         continue;
       }
       const isSubj = it.t === "subj", optCnt = isSubj ? 3 : 5;
-      const paperLum = Math.max(150, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
+      const paperLum = Math.max(75, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
       const scores = [];
       for (let b = 0; b < optCnt; b++) scores.push({ b: b, bx: OMR_COL_X[col][b], sc: measureDark_(OMR_COL_X[col][b], cy, innerRad, paperLum) });
       const sorted = scores.slice().sort(function(a, b) { return a.sc - b.sc; });
@@ -736,8 +926,10 @@
     thumb.width = 400; thumb.height = 560;
     thumb.getContext("2d").drawImage(prevCv, 0, 0, 400, 560);
     return {
-      qrFound: Boolean(qrMeta), erpId: erpId, secKey: secKey,
-      fromNo: effFromNo, toNo: effToNo, rangeMarked: rangeMarked,
+      qrFound: qrFound,
+      isBlankCard: Boolean(qrMeta && qrMeta.isBlankCard),
+      erpId: erpId, secKey: secKey,
+      fromNo: effFromNo, toNo: effToNo, ranges: ranges, rangeMarked: rangeMarked,
       answers: answers, warnCount: warnCount, previewUrl: thumb.toDataURL("image/jpeg", 0.78)
     };
   }
@@ -847,19 +1039,29 @@
             pEl.className = "cam-pill " + (STABLE_CNT >= 1 ? "ok" : "warn");
             pEl.textContent = STABLE_CNT >= 1 ? "✓ OMR 4코너 인식! 다음 답안지를 넘겨주세요" : "🎯 4코너 마커 고정 중...";
           }
-          if (STABLE_CNT === 1 || (STABLE_CNT > 1 && STABLE_CNT % 6 === 0)) {
+          if (STABLE_CNT === 1 || (STABLE_CNT > 1 && STABLE_CNT % 4 === 0)) {
             fullCv.width = vw; fullCv.height = vh;
             fullCv.getContext("2d").drawImage(vid, 0, 0, vw, vh);
             const warped = warpAndOrientOmrCanvas_(fullCv, qf);
             if (warped) {
               const parsed = readWarpedOmrCanvas_(warped);
-              const ansCnt = Object.keys(parsed.answers || {}).length;
-              const sig = parsed.erpId + "|" + parsed.secKey + "|" + parsed.fromNo + "-" + parsed.toNo + "|" + JSON.stringify(parsed.answers);
-              const nowMs = Date.now();
-              if (sig !== LAST_SIG && (nowMs - LAST_SIG_AT) > 700) {
-                LAST_SIG = sig; LAST_SIG_AT = nowMs;
-                onOmrParsed_(parsed, "직통실시간OMR");
-                if (ansCnt === 0 && !parsed.qrFound) { STABLE_CNT = 0; LAST_SIG = ""; }
+              // 실시간 카메라에서 오토포커스 전 흐린 프레임으로 QR 미인식 오채점 방지!
+              if (!parsed.qrFound && !S.allowBlankQr) {
+                if (pEl) {
+                  pEl.className = "cam-pill warn";
+                  pEl.textContent = "🎯 4코너 고정됨 · 우상단 QR 초점 맞추는 중... (잠시 유지)";
+                }
+                STABLE_CNT = 2; // 다음 4프레임마다 QR 재시도
+              } else {
+                const ansCnt = Object.keys(parsed.answers || {}).length;
+                const rngSig = formatRanges_(parsed.ranges);
+                const sig = parsed.erpId + "|" + parsed.secKey + "|" + rngSig + "|" + JSON.stringify(parsed.answers);
+                const nowMs = Date.now();
+                if (sig !== LAST_SIG && (nowMs - LAST_SIG_AT) > 700) {
+                  LAST_SIG = sig; LAST_SIG_AT = nowMs;
+                  onOmrParsed_(parsed, "직통실시간OMR");
+                  if (ansCnt === 0 && !parsed.qrFound) { STABLE_CNT = 0; LAST_SIG = ""; }
+                }
               }
             }
           }
@@ -989,38 +1191,55 @@
   };
 
   function onOmrParsed_(parsed, method) {
-    const stu = getStu_(parsed.erpId) || getStu_(S.selStudentId);
+    const qrMissing = !parsed.qrFound && !S.allowBlankQr;
+    const isBlankCard = Boolean(parsed.isBlankCard);
+    // 절대 QR 미인식 시 임의의 기본 학생으로 덮어쓰지 않음!
+    const stu = qrMissing
+      ? null
+      : (parsed.erpId ? getStu_(parsed.erpId) : (S.allowBlankQr ? getStu_(S.selStudentId) : null));
     const meta = getSecMeta_(parsed.secKey);
-    const graded = gradeLocal_(parsed.secKey, parsed.answers, parsed.fromNo, parsed.toNo);
+    const ranges = (Array.isArray(parsed.ranges) && parsed.ranges.length) ? parsed.ranges : [[parsed.fromNo, parsed.toNo]];
+    const graded = gradeLocal_(parsed.secKey, parsed.answers, ranges);
     const item = {
       id: "D_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 5),
-      erpId: stu ? stu.erpId : (parsed.erpId || ""),
-      name: stu ? stu.name : "학생 선택 필요",
+      erpId: stu ? stu.erpId : "",
+      name: stu ? stu.name : (qrMissing ? "⚠️ QR 미인식 (학생·교재 선택)" : (isBlankCard ? "공용 OMR (학생 선택)" : ("⚠️ 미등록 ID(" + parsed.erpId + ")"))),
       school: stu ? stu.school : "",
       naesinBan: stu ? stu.naesinBan : "",
       secKey: parsed.secKey, secTitle: meta.title,
-      fromNo: parsed.fromNo, toNo: parsed.toNo,
+      fromNo: ranges[0][0], toNo: ranges[ranges.length - 1][1],
+      ranges: ranges,
       rangeMarked: Boolean(parsed.rangeMarked),
+      qrFound: Boolean(parsed.qrFound),
+      qrMissing: qrMissing,
       answers: parsed.answers, graded: graded,
       method: method, previewUrl: parsed.previewUrl || "",
-      warnCount: parsed.warnCount || 0, saved: false, saving: false
+      warnCount: parsed.warnCount || 0, saved: false, saving: false,
+      savedKey: null
     };
     const exIdx = S.queue.findIndex(function(q) {
-      return !q.saved && q.erpId === item.erpId && q.secKey === item.secKey && q.fromNo === item.fromNo && q.toNo === item.toNo;
+      return !q.saved && q.erpId === item.erpId && q.secKey === item.secKey && formatRanges_(q.ranges) === formatRanges_(item.ranges);
     });
     if (exIdx >= 0) S.queue[exIdx] = item; else S.queue.unshift(item);
     S.activeId = item.id;
-    beep_(item.warnCount ? "warn" : "ok");
+    beep_((qrMissing || !stu || item.warnCount) ? "warn" : "ok");
 
     const bn = document.getElementById("camBanner");
     if (bn) {
-      bn.innerHTML = '<span>✓ ' + esc_(item.name) + ' · ' + esc_(meta.shortLbl) + ' · <strong>' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong>' + (item.rangeMarked ? ' [구간체크]' : '') + '</span><span style="font-size:11px; opacity:0.9;">다음 종이를 비추세요</span>';
+      if (qrMissing || !stu) {
+        bn.style.background = "rgba(217, 119, 6, 0.94)";
+        bn.innerHTML = '<span>⚠️ QR 미인식 · 자동저장 차단됨! 오른쪽에서 학생·교재 선택 후 저장하세요</span><span style="font-size:11px;">재스캔 가능</span>';
+      } else {
+        bn.style.background = "rgba(5, 150, 105, 0.94)";
+        bn.innerHTML = '<span>✓ ' + esc_(item.name) + ' · ' + esc_(meta.shortLbl) + ' (' + esc_(formatRanges_(ranges)) + '번) · <strong>' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong>' + (item.rangeMarked ? ' [구간체크]' : '') + '</span><span style="font-size:11px; opacity:0.9;">다음 종이를 비추세요</span>';
+      }
       bn.classList.add("show");
       clearTimeout(bn._tm);
-      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, 2800);
+      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, (qrMissing || !stu) ? 4500 : 2800);
     }
     renderRight_();
-    if (S.autoSave && stu && graded.solved > 0) saveItem_(item.id, true);
+    // QR로 학생·교재가 정확히 확인된 경우에만 자동 저장! (오저장 원천 차단)
+    if (S.autoSave && !qrMissing && !isBlankCard && stu && graded.solved > 0) saveItem_(item.id, true);
   }
 
   async function postApi_(payload) {
@@ -1038,6 +1257,19 @@
     if (!item) return;
     const stu = getStu_(item.erpId);
     if (!stu) { showTopToast_("학생을 먼저 선택해주세요.", "warn"); return; }
+    const ranges = (Array.isArray(item.ranges) && item.ranges.length) ? item.ranges : [[item.fromNo, item.toNo]];
+    const newKey = stu.erpId + "|" + item.secKey;
+    // 이미 다른 학생·교재로 잘못 저장했던 항목을 수정 저장하는 경우 기존 잘못된 기록 자동 삭제 확인
+    if (item.savedKey && item.savedKey !== newKey && !silent) {
+      const oldParts = item.savedKey.split("|");
+      const oldStu = getStu_(oldParts[0]);
+      const oldSec = getSecMeta_(oldParts[1]);
+      if (window.confirm("기존에 저장되었던 [" + (oldStu ? oldStu.name : oldParts[0]) + " · " + oldSec.shortLbl + "] 기록은 삭제하고 [" + stu.name + " · " + item.secTitle + "]로 옮겨 저장할까요?")) {
+        try {
+          await postApi_({ api: "naesinOmrDelete", tok: S.tok, seasonCode: S.seasonCode, erpId: oldParts[0], secKey: oldParts[1], clearProgress: true });
+        } catch (_) {}
+      }
+    }
     item.saving = true;
     renderRight_();
     try {
@@ -1045,14 +1277,16 @@
         api: "naesinOmrSave", tok: S.tok, seasonCode: S.seasonCode, teacher: S.teacher,
         entries: [{
           erpId: stu.erpId, name: stu.name, school: stu.school, naesinBan: stu.naesinBan,
-          secKey: item.secKey, answers: filterAnsToRange_(item.answers, item.fromNo, item.toNo),
-          mergeMode: true, replaceRange: [item.fromNo, item.toNo], method: item.method
+          secKey: item.secKey, answers: filterAnsToRanges_(item.answers, ranges),
+          mergeMode: true, replaceRanges: ranges, method: item.method
         }]
       });
       item.saving = false;
       if (res && res.success) {
         item.saved = true;
-        if (!silent) showTopToast_("✓ " + stu.name + " 채점 저장 및 전자 내신출석부 반영 완료!", "ok");
+        item.qrMissing = false;
+        item.savedKey = newKey;
+        if (!silent) showTopToast_("✓ " + stu.name + " · " + item.secTitle + " 저장 및 출석부 반영 완료!", "ok");
       } else {
         showTopToast_("저장 실패: " + ((res && res.message) || "오류"), "warn");
       }
@@ -1063,22 +1297,47 @@
     renderRight_();
   };
 
+  window.deleteItem_ = async function(id) {
+    const item = S.queue.find(function(x) { return x.id === id; });
+    if (!item) return;
+    const keyToDel = item.savedKey || (item.erpId ? (item.erpId + "|" + item.secKey) : "");
+    if (keyToDel && item.saved) {
+      const parts = keyToDel.split("|");
+      const st = getStu_(parts[0]);
+      const sec = getSecMeta_(parts[1]);
+      if (!window.confirm("[" + (st ? st.name : item.name) + " · " + sec.title + "] 저장된 채점 기록과 전자 내신출석부 진도 칸을 모두 삭제할까요?")) return;
+      showTopToast_("저장 기록 및 출석부 진도 삭제 중...", "info");
+      try {
+        const res = await postApi_({ api: "naesinOmrDelete", tok: S.tok, seasonCode: S.seasonCode, erpId: parts[0], secKey: parts[1], clearProgress: true });
+        if (res && res.success) {
+          showTopToast_("🗑️ " + (res.message || "삭제 완료!"), "ok");
+        } else {
+          showTopToast_("삭제 알림: " + ((res && res.message) || "기록 없음"), "warn");
+        }
+      } catch (e) { showTopToast_("삭제 오류: " + e.message, "warn"); }
+    }
+    S.queue = S.queue.filter(function(x) { return x.id !== id; });
+    if (S.activeId === id) S.activeId = S.queue[0] ? S.queue[0].id : "";
+    renderRight_();
+  };
+
   window.saveAllUnsaved_ = async function() {
     const list = S.queue.filter(function(q) { return !q.saved && getStu_(q.erpId); });
-    if (!list.length) return;
+    if (!list.length) { showTopToast_("학생이 지정된 미저장 건이 없습니다.", "warn"); return; }
     showTopToast_(list.length + "건 일괄 저장 중...", "info");
     try {
       const entries = list.map(function(it) {
         const st = getStu_(it.erpId);
+        const ranges = (Array.isArray(it.ranges) && it.ranges.length) ? it.ranges : [[it.fromNo, it.toNo]];
         return {
           erpId: st.erpId, name: st.name, school: st.school, naesinBan: st.naesinBan,
-          secKey: it.secKey, answers: filterAnsToRange_(it.answers, it.fromNo, it.toNo),
-          mergeMode: true, replaceRange: [it.fromNo, it.toNo], method: it.method
+          secKey: it.secKey, answers: filterAnsToRanges_(it.answers, ranges),
+          mergeMode: true, replaceRanges: ranges, method: it.method
         };
       });
       const res = await postApi_({ api: "naesinOmrSave", tok: S.tok, seasonCode: S.seasonCode, teacher: S.teacher, entries: entries });
       if (res && res.success) {
-        list.forEach(function(q) { q.saved = true; });
+        list.forEach(function(q) { q.saved = true; q.savedKey = q.erpId + "|" + q.secKey; });
         showTopToast_("✓ " + res.message, "ok");
       } else { showTopToast_("저장 실패: " + ((res && res.message) || "오류"), "warn"); }
     } catch (e) { showTopToast_("오류: " + e.message, "warn"); }
@@ -1089,18 +1348,32 @@
   window.clearQ_ = function() { S.queue = []; S.activeId = ""; renderRight_(); };
   window.reassignStu_ = function(id, eid) {
     const q = S.queue.find(function(x) { return x.id === id; }), st = getStu_(eid);
-    if (q && st) { q.erpId = st.erpId; q.name = st.name; q.school = st.school; q.naesinBan = st.naesinBan; q.saved = false; renderRight_(); }
+    if (q && st) { q.erpId = st.erpId; q.name = st.name; q.school = st.school; q.naesinBan = st.naesinBan; q.qrMissing = false; q.saved = false; renderRight_(); }
   };
-  window.setQRange_ = function(id, fV, tV) {
+  window.reassignSec_ = function(id, sk) {
+    const q = S.queue.find(function(x) { return x.id === id; });
+    if (!q || !S.itemsBySec[sk]) return;
+    const meta = getSecMeta_(sk);
+    const maxN = (S.itemsBySec[sk] || []).length || 20;
+    q.secKey = sk;
+    q.secTitle = meta.title;
+    q.ranges = [[1, Math.min(maxN, Math.max(q.toNo || 20, maxN))]];
+    q.fromNo = q.ranges[0][0]; q.toNo = q.ranges[0][1];
+    q.saved = false;
+    renderRight_();
+  };
+  window.setQRangesText_ = function(id, txt) {
     const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
     const maxN = (S.itemsBySec[q.secKey] || []).length || 999;
-    let f = fV != null ? Number(fV) : q.fromNo, t = tV != null ? Number(tV) : q.toNo;
-    f = Math.max(1, Math.min(maxN, Math.round(f || 1))); t = Math.max(f, Math.min(maxN, Math.round(t || maxN)));
-    q.fromNo = f; q.toNo = t; q.saved = false; renderRight_();
+    const rgs = parseRangesText_(txt, maxN, q.fromNo, q.toNo);
+    q.ranges = rgs;
+    q.fromNo = rgs[0][0]; q.toNo = rgs[rgs.length - 1][1];
+    q.saved = false; renderRight_();
   };
   window.markBlanksX_ = function(id) {
     const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
-    (S.itemsBySec[q.secKey] || []).forEach(function(it) { if (it.n >= q.fromNo && it.n <= q.toNo && !q.answers[String(it.n)]) q.answers[String(it.n)] = "X"; });
+    const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
+    (S.itemsBySec[q.secKey] || []).forEach(function(it) { if (isInRanges_(it.n, rgs) && !q.answers[String(it.n)]) q.answers[String(it.n)] = "X"; });
     q.saved = false; renderRight_();
   };
   window.toggleAns_ = function(id, n, opt, qt) {
@@ -1147,6 +1420,7 @@
           '<div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">' +
             '<label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" ' + (S.autoSave ? 'checked' : '') + ' onchange="S_SET_(\'autoSave\', this.checked)"> 스캔 즉시 출석부 자동저장</label>' +
             '<label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" ' + (S.soundOn ? 'checked' : '') + ' onchange="S_SET_(\'soundOn\', this.checked)"> "띠릭!" 효과음</label>' +
+            '<label style="display:inline-flex; align-items:center; gap:5px; color:#94a3b8;" title="체크 해제 시 QR이 안 읽히면 오저장을 자동 차단합니다"><input type="checkbox" ' + (S.allowBlankQr ? 'checked' : '') + ' onchange="S_SET_(\'allowBlankQr\', this.checked)"> QR 없는 공용 OMR 허용</label>' +
           '</div>' +
           '<label class="btn sm">🖼️ 사진 업로드<input type="file" accept="image/*" multiple style="display:none;" onchange="handleFiles_(this.files, this)"></label>' +
         '</div>' +
@@ -1199,34 +1473,42 @@
     } else {
       h += '<div class="q-list">';
       S.queue.forEach(function(q) {
-        const g = gradeLocal_(q.secKey, q.answers, q.fromNo, q.toNo);
+        const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
+        const g = gradeLocal_(q.secKey, q.answers, rgs);
         q.graded = g;
         h += '<div class="q-item ' + (act && act.id === q.id ? 'sel ' : '') + (q.saved ? 'saved' : 'unsaved') + '" onclick="selQ_(\'' + esc_(q.id) + '\')">' +
           '<div><div style="font-size:13px; font-weight:800;">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
-          '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + q.fromNo + '~' + q.toNo + '번</div></div>' +
+          '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + esc_(formatRanges_(rgs)) + '번</div></div>' +
           '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
-          '<div style="font-size:10.5px; color:' + (q.saved ? '#34d399' : '#fbbf24') + ';">' + (q.saving ? '☁️ 저장 중...' : (q.saved ? '✓ 출석부 저장됨' : '● 미저장')) + '</div></div>' +
+          '<div style="font-size:10.5px; color:' + (q.qrMissing ? '#f87171' : (q.saved ? '#34d399' : '#fbbf24')) + ';">' + (q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (q.saved ? '✓ 출석부 저장됨' : '● 미저장'))) + '</div></div>' +
         '</div>';
       });
       h += '</div>';
     }
 
     if (act) {
-      const g = gradeLocal_(act.secKey, act.answers, act.fromNo, act.toNo);
-      const maxN = (S.itemsBySec[act.secKey] || []).length || act.toNo || 20;
+      const actRgs = (Array.isArray(act.ranges) && act.ranges.length) ? act.ranges : [[act.fromNo, act.toNo]];
+      const g = gradeLocal_(act.secKey, act.answers, actRgs);
+      const rngTxt = formatRanges_(actRgs);
       h += '<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line);">' +
+        (act.qrMissing ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(239,68,68,0.18); border:1px solid rgba(248,113,113,0.45); font-size:11.5px; font-weight:800; color:#fecaca;">⚠️ QR 코드가 읽히지 않아 오저장을 자동 차단했습니다. 아래에서 학생·교재를 직접 고른 뒤 [💾 저장]하거나 다시 스캔해 주세요.</div>' : '') +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
-          '<div><div style="font-size:13.5px; font-weight:900;">🔍 ' + esc_(act.name) + ' · ' + act.fromNo + '~' + act.toNo + '번</div>' +
+          '<div><div style="font-size:13.5px; font-weight:900;">🔍 ' + esc_(act.name) + ' · ' + esc_(rngTxt) + '번</div>' +
           '<div style="font-size:11.5px; color:#cbd5e1; margin-top:2px;">맞음 <strong style="color:#34d399;">' + g.correct + '</strong> · 틀림 <strong style="color:#f87171;">' + g.wrong + '</strong> · 정답률 <strong style="color:#38bdf8;">' + g.acc + '%</strong></div></div>' +
-          '<div style="display:flex; gap:5px; align-items:center;">' +
+          '<div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;">' +
             '<select class="sel" style="height:28px; max-width:130px;" onchange="reassignStu_(\'' + esc_(act.id) + '\', this.value)">' +
-              S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === act.erpId ? ' selected' : '') + '>' + esc_(s.name) + '</option>'; }).join("") +
+              '<option value="">-- 학생 선택 --</option>' +
+              S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === act.erpId ? ' selected' : '') + '>[' + esc_(s.naesinBan) + '] ' + esc_(s.name) + '</option>'; }).join("") +
+            '</select>' +
+            '<select class="sel" style="height:28px; max-width:165px;" onchange="reassignSec_(\'' + esc_(act.id) + '\', this.value)">' +
+              S.sections.map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === act.secKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
             '</select>' +
             '<button type="button" class="btn em sm" onclick="saveItem_(\'' + esc_(act.id) + '\', false)">💾 저장</button>' +
+            '<button type="button" class="btn sm" style="background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.5); color:#fecaca;" onclick="deleteItem_(\'' + esc_(act.id) + '\')">🗑️ 삭제</button>' +
           '</div>' +
         '</div>' +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; padding:7px 9px; border-radius:9px; background:rgba(124,58,237,0.16); border:1px solid rgba(167,139,250,0.35); margin-bottom:8px; font-size:11.5px; font-weight:800;">' +
-          '<span style="display:inline-flex; align-items:center; gap:4px;">🎯 범위: <input type="number" class="rng-inp" min="1" max="' + maxN + '" value="' + act.fromNo + '" onchange="setQRange_(\'' + esc_(act.id) + '\', this.value, null)"> ~ <input type="number" class="rng-inp" min="1" max="' + maxN + '" value="' + act.toNo + '" onchange="setQRange_(\'' + esc_(act.id) + '\', null, this.value)">번</span>' +
+          '<span style="display:inline-flex; align-items:center; gap:5px; flex-wrap:wrap;">🎯 채점 구간: <input type="text" class="rng-inp" style="width:136px; text-align:left; padding:0 7px;" value="' + esc_(rngTxt) + '" placeholder="예: 11-20, 25-34" onchange="setQRangesText_(\'' + esc_(act.id) + '\', this.value)">' + (act.rangeMarked ? '<span style="color:#c4b5fd; font-size:10.5px;">✓ 구간체크</span>' : '') + '</span>' +
           '<button type="button" class="btn sm" style="background:rgba(239,68,68,0.22); border-color:rgba(248,113,113,0.45);" onclick="markBlanksX_(\'' + esc_(act.id) + '\')">빈칸→오답(X)</button>' +
         '</div>' +
         (act.previewUrl ? '<details style="margin-bottom:8px;"><summary style="cursor:pointer; font-size:11.5px; font-weight:800; color:#7dd3fc;">🖼️ 원근보정 OMR 오버레이 보기</summary><img src="' + act.previewUrl + '" style="width:100%; max-width:280px; border-radius:8px; margin-top:6px; display:block;"></details>' : '') +
