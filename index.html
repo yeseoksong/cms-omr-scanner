@@ -240,7 +240,7 @@
 <div class="app-shell">
   <header class="topbar">
     <div class="brand">
-      <span>📷 CMS 직통 실시간 OMR 스캐너 <small style="opacity:0.75; font-size:10px; font-weight:700;">v2.5</small></span>
+      <span>📷 CMS 직통 실시간 OMR 스캐너 <small style="opacity:0.75; font-size:10px; font-weight:700;">v2.6</small></span>
       <span id="seasonBadge" class="pill">iframe 없음 · 전 기기 지원</span>
       <span id="syncBadge" class="pill ok" style="display:none;">출석부 실시간 연동</span>
     </div>
@@ -285,6 +285,7 @@
     seasonName: "",
     students: [],
     sections: [],
+    prepSections: [],
     itemsBySec: {},
     results: [],
     wrongSets: {},
@@ -369,7 +370,9 @@
   }
 
   function getSecMeta_(k) {
-    return S.sections.find(function(x) { return x.key === k; }) || { key: k, shortLbl: k, title: k, count: 20 };
+    return S.sections.find(function(x) { return x.key === k; })
+      || (S.prepSections || []).find(function(x) { return x.key === k; })
+      || { key: k, shortLbl: k, title: k, count: 20 };
   }
   function getStu_(id) {
     const clean = String(id == null ? "" : id).trim();
@@ -844,6 +847,7 @@
     if (parts[1] === "W" || parts[1] === "W2") {
       return {
         isWrongRetest: true,
+        isPrepExam: false,
         isV2Spacious: parts[1] === "W2",
         erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
         isBlankCard: parts[2] === "BLANK",
@@ -854,8 +858,24 @@
         layout: Number(parts[6]) || 30
       };
     }
+    if (parts[1] === "P" || parts[1] === "P2") {
+      const pid = String(parts[3] || "").trim();
+      return {
+        isWrongRetest: false,
+        isPrepExam: true,
+        isV2Spacious: parts[1] === "P2",
+        erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
+        isBlankCard: parts[2] === "BLANK",
+        prepSetId: pid,
+        secKey: "NP:" + pid,
+        fromNo: Number(parts[4]) || 1,
+        toNo: Number(parts[5]) || 20,
+        layout: Number(parts[6]) || 30
+      };
+    }
     return {
       isWrongRetest: false,
+      isPrepExam: false,
       isV2Spacious: parts[1] === "2",
       erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
       isBlankCard: parts[2] === "BLANK",
@@ -1037,10 +1057,14 @@
 
     const qrFound = Boolean(qrMeta);
     const isWrongRetest = Boolean(qrMeta && qrMeta.isWrongRetest);
+    const isPrepExam = Boolean(qrMeta && qrMeta.isPrepExam);
     const wrongSetId = isWrongRetest ? String(qrMeta.setId || "").toUpperCase() : "";
+    const prepSetId = isPrepExam ? String(qrMeta.prepSetId || "").trim() : "";
     const secKey = isWrongRetest
       ? ("WR:" + wrongSetId)
-      : ((qrMeta && qrMeta.secKey && S.itemsBySec[qrMeta.secKey]) ? qrMeta.secKey : S.selSecKey);
+      : (isPrepExam
+        ? ("NP:" + prepSetId)
+        : ((qrMeta && qrMeta.secKey && S.itemsBySec[qrMeta.secKey]) ? qrMeta.secKey : S.selSecKey));
     const secItemsAll = isWrongRetest ? getWrongSetVirtualItems_(wrongSetId) : (S.itemsBySec[secKey] || []);
     const fromNo = qrMeta ? qrMeta.fromNo : (S.rangeFrom || 1);
     const toNo = qrMeta ? qrMeta.toNo : (S.rangeTo || secItemsAll.length || 20);
@@ -1049,6 +1073,7 @@
       ? (qrMeta.erpId || "")
       : (S.allowBlankQr ? S.selStudentId : "");
     const missingWrongSet = Boolean(isWrongRetest && wrongSetId && !secItemsAll.length);
+    const missingPrepSet = Boolean(isPrepExam && prepSetId && !secItemsAll.length);
 
     const rangeItems = secItemsAll.filter(function(it) { return it.n >= fromNo && it.n <= toNo; });
     const count = rangeItems.length || Math.max(1, toNo - fromNo + 1);
@@ -1354,8 +1379,11 @@
       isWrongRetest: isWrongRetest,
       wrongSetId: wrongSetId,
       missingWrongSet: missingWrongSet,
-      warpedCanvasRef: missingWrongSet ? warpedCanvas : null,
-      qrMetaRef: missingWrongSet ? qrMeta : null,
+      isPrepExam: isPrepExam,
+      prepSetId: prepSetId,
+      missingPrepSet: missingPrepSet,
+      warpedCanvasRef: (missingWrongSet || missingPrepSet) ? warpedCanvas : null,
+      qrMetaRef: (missingWrongSet || missingPrepSet) ? qrMeta : null,
       erpId: erpId, secKey: secKey,
       fromNo: effFromNo, toNo: effToNo, ranges: ranges, rangeMarked: rangeMarked,
       answers: answers, subjCrops: subjCrops, subjPendingNos: subjPendingNos,
@@ -1731,6 +1759,29 @@
         }
       } catch (_) {}
       showTopToast_("오답 재채점 세트(" + parsed.wrongSetId + ")를 찾지 못했습니다.", "warn");
+      return;
+    }
+
+    // 방금 인쇄한 기출·예상 시험지가 로컬 캐시에 없을 경우 서버에서 온디맨드 자동 조회 후 즉시 채점!
+    if (parsed.missingPrepSet && parsed.prepSetId && parsed.warpedCanvasRef && !parsed._retriedPrepSet) {
+      showTopToast_("🏫 기출·예상 시험지(" + parsed.prepSetId + ") 정답표 조회 중...", "info");
+      try {
+        const u = S.apiUrl + (S.apiUrl.indexOf("?") >= 0 ? "&" : "?") + "api=naesinOmrPrepExam&tok=" + encodeURIComponent(S.tok) + "&setId=" + encodeURIComponent(parsed.prepSetId);
+        const resp = await fetch(u, { redirect: "follow" });
+        const r = await resp.json();
+        if (r && r.success && r.secKey && Array.isArray(r.items) && r.items.length) {
+          S.itemsBySec[r.secKey] = r.items;
+          S.prepSections = S.prepSections || [];
+          const pSec = r.section || { key: r.secKey, step: "PREP", grp: "기출·예상", shortLbl: r.secKey, title: r.secKey, count: r.items.length };
+          const pi = S.prepSections.findIndex(function(x) { return x && x.key === r.secKey; });
+          if (pi >= 0) S.prepSections[pi] = pSec; else S.prepSections.unshift(pSec);
+          const re = readWarpedOmrCanvas_({ canvas: parsed.warpedCanvasRef, qrMeta: parsed.qrMetaRef });
+          re._retriedPrepSet = true;
+          onOmrParsed_(re, method);
+          return;
+        }
+      } catch (_) {}
+      showTopToast_("기출·예상 시험지(" + parsed.prepSetId + ") 정답표를 찾지 못했습니다.", "warn");
       return;
     }
 
@@ -2183,7 +2234,7 @@
             S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === S.selStudentId ? ' selected' : '') + '>[' + esc_(s.naesinBan) + '] ' + esc_(s.name) + '</option>'; }).join("") +
           '</select>' +
           '<select class="sel" style="max-width:210px;" onchange="S_SET_SEC_(this.value)">' +
-            S.sections.map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === S.selSecKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
+            S.sections.concat(S.prepSections || []).map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === S.selSecKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
           '</select>' +
           '<input type="number" class="rng-inp" min="1" value="' + S.rangeFrom + '" onchange="S_SET_(\'rangeFrom\', Number(this.value)||1)">' +
           '<span style="color:#94a3b8;">~</span>' +
@@ -2266,7 +2317,7 @@
               S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === act.erpId ? ' selected' : '') + '>[' + esc_(s.naesinBan) + '] ' + esc_(s.name) + '</option>'; }).join("") +
             '</select>' +
             (!act.isWrongRetest ? ('<select class="sel" style="height:28px; max-width:165px;" onchange="reassignSec_(\'' + esc_(act.id) + '\', this.value)">' +
-              S.sections.map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === act.secKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
+              S.sections.concat(S.prepSections || []).map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === act.secKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
             '</select>') : '') +
             '<button type="button" class="btn em sm" onclick="saveItem_(\'' + esc_(act.id) + '\', false)">' + (act.isWrongRetest ? '💾 오답해결 반영' : '💾 저장') + '</button>' +
             '<button type="button" class="btn sm" style="background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.5); color:#fecaca;" onclick="deleteItem_(\'' + esc_(act.id) + '\')">🗑️ 삭제</button>' +
@@ -2399,6 +2450,7 @@
       S.teacher = res.teacher || "직통OMR스캐너";
       S.students = res.students || [];
       S.sections = res.sections || [];
+      S.prepSections = Array.isArray(res.prepSections) ? res.prepSections : [];
       S.itemsBySec = res.itemsBySec || {};
       S.results = res.results || [];
       S.wrongSets = res.wrongSets || {};
