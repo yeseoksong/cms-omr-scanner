@@ -456,6 +456,7 @@
         .replace(/π|파이|pi/gi, "pi")
         .replace(/\s+/g, "");
       x = x.replace(/([0-9]|pi|\))(cm\^?[23]|cm|mm|m\^?[23]|km|m|도|개|원|초후|초|분|시간|가지|명|번|배|회|점)$/i, "$1");
+      x = x.replace(/^(sss|sas|asa|rha|rhs|aa)(합동|닮음)$/i, "$1");
       if (/^(?:[a-z]|답|정답|∠[a-z]+)=[+-]?\d/.test(x)) {
         x = x.replace(/^(?:[a-z]|답|정답|∠[a-z]+)=/, "");
       }
@@ -477,6 +478,11 @@
       const ca = cleanAtom_(a), cb = cleanAtom_(b);
       if (!ca || !cb) return false;
       if (ca === cb || ca.replace(/[()]/g, "") === cb.replace(/[()]/g, "")) return true;
+      const mPar = String(b || "").trim().match(/^([^(]+?)\s*\(([^)]+)\)$/);
+      if (mPar) {
+        const mc = cleanAtom_(mPar[1]), ic = cleanAtom_(mPar[2]);
+        if ((mc && ca === mc) || (ic && ca === ic)) return true;
+      }
       const na = parseNum_(ca), nb = parseNum_(cb);
       if (Number.isFinite(na) && Number.isFinite(nb)) return Math.abs(na - nb) < 1e-6;
       return false;
@@ -491,7 +497,7 @@
       }
     }
     if (/\(\d+(?:-\d+)?\)/.test(c0)) {
-      const splitS = function(str) { return String(str || "").split(/\(\d+(?:-\d+)?\)/).map(function(v) { return v.trim(); }).filter(Boolean); };
+      const splitS = function(str) { return String(str || "").split(/\(\d+(?:-\d+)?\)/).map(function(v) { return v.replace(/^[,;:\s]+|[,;\s]+$/g, "").trim(); }).filter(Boolean); };
       const cS = splitS(c0);
       const splitTopC_ = function(str) {
         const res = []; let cur = "", d = 0;
@@ -830,9 +836,10 @@
     if (!rawStr || rawStr.indexOf("CMSOMR|") !== 0) return null;
     const parts = rawStr.split("|");
     if (parts.length < 6) return null;
-    if (parts[1] === "W") {
+    if (parts[1] === "W" || parts[1] === "W2") {
       return {
         isWrongRetest: true,
+        isV2Spacious: parts[1] === "W2",
         erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
         isBlankCard: parts[2] === "BLANK",
         setId: String(parts[3] || "").trim().toUpperCase(),
@@ -844,6 +851,7 @@
     }
     return {
       isWrongRetest: false,
+      isV2Spacious: parts[1] === "2",
       erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
       isBlankCard: parts[2] === "BLANK",
       secKey: String(parts[3] || "").trim(),
@@ -1085,32 +1093,55 @@
     const pCtx = prevCv.getContext("2d");
     pCtx.drawImage(warpedCanvas, 0, 0);
 
-    const totalSlots = Math.min(spec.perCol * 2, rangeItems.length);
-    // [□ 구간] 다중 구간 체크박스 판독 (예: 1·24·30·35·47 → 1~24, 30~35, 47~끝까지!)
-    const rangeRad = spec.is70 ? 4.4 : (spec.is50 ? 5.2 : 6.8);
-    const rangeSamples = [];
-    for (let idx = 0; idx < totalSlots; idx++) {
-      const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
-      const cy = spec.startY + row * spec.stepY, rx = OMR_RANGE_COL_X[col];
-      const paperLum = Math.max(75, (sampleLum_(rx - 14, cy, 3) + sampleLum_(OMR_COL_X[col][0] + 24, cy, 4)) / 2);
-      rangeSamples.push({ n: it.n, rx: rx, cy: cy, sc: measureDark_(rx, cy, rangeRad, paperLum) });
-    }
-    const rSorted = rangeSamples.map(function(x) { return x.sc; }).sort(function(a, b) { return a - b; });
-    const rBase = rSorted.length ? rSorted[Math.floor(rSorted.length * 0.25)] : 0;
-    const rangeChecked = rangeSamples.filter(function(s) { return (s.sc - rBase) >= 0.22 && s.sc >= 0.30; });
-    const rangeMarked = rangeChecked.length >= 1;
-    const ranges = rangeMarked
-      ? buildRangesFromCheckedNos_(rangeChecked.map(function(r) { return r.n; }), fromNo, toNo)
-      : [[fromNo, toNo]];
-    const effFromNo = ranges[0][0];
-    const effToNo = ranges[ranges.length - 1][1];
-    if (rangeMarked) {
-      const bh = spec.is70 ? 7.5 : (spec.is50 ? 9 : 11);
-      rangeChecked.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - bh, rc.cy - bh, bh * 2, bh * 2); });
+    function getOmrV2Layout_(rawItems) {
+      const items = Array.isArray(rawItems) ? rawItems : [];
+      const mcqList = [], subjList = [];
+      items.forEach(function(it) {
+        if (it && (it.t === "subj" || it.type === "subj")) subjList.push(it);
+        else if (it) mcqList.push(it);
+      });
+      const isAllSubj = items.length > 0 && mcqList.length === 0;
+      const slots = [];
+      if (isAllSubj) {
+        if (subjList.length <= 12) {
+          const topY = 234, botY = 1042, stepY = Math.min(92, (botY - topY) / Math.max(1, subjList.length));
+          const boxH = Math.max(44, Math.min(82, stepY - 8));
+          for (let i = 0; i < subjList.length; i++) {
+            const cy = topY + stepY * (i + 0.5);
+            slots.push({ it: subjList[i], kind: "subj", col: 0, cy: cy, rx: OMR_RANGE_COL_X[0], bx0: 136, by0: cy - boxH / 2, bw: 596, bh: boxH, stepY: stepY, radius: 13 });
+          }
+        } else {
+          const perCol = Math.ceil(subjList.length / 2), topY = 234, botY = 1042, stepY = (botY - topY) / Math.max(1, perCol);
+          const boxH = Math.max(24, Math.min(58, stepY - 7));
+          for (let i = 0; i < subjList.length; i++) {
+            const col = i < perCol ? 0 : 1, row = i % perCol, cy = topY + stepY * (row + 0.5);
+            slots.push({ it: subjList[i], kind: "subj", col: col, cy: cy, rx: OMR_RANGE_COL_X[col], bx0: col === 0 ? 136 : 482, by0: cy - boxH / 2, bw: 256, bh: boxH, stepY: stepY, radius: 11 });
+          }
+        }
+        return { slots: slots };
+      }
+      const subjCnt = subjList.length, mcqPerCol = Math.max(1, Math.ceil(mcqList.length / 2));
+      const desiredSubjH = subjCnt === 1 ? 195 : (subjCnt === 2 ? 285 : (subjCnt === 3 ? 330 : Math.min(430, subjCnt * 86 + 34)));
+      const topMcqY = 236, maxMcqAvailH = Math.max(240, (1046 - topMcqY) - desiredSubjH - 18);
+      const mcqStepY = Math.min(44, Math.max(22, maxMcqAvailH / mcqPerCol));
+      const mcqRadius = mcqStepY >= 36 ? 12.5 : (mcqStepY >= 29 ? 10.5 : 8.5);
+      for (let i = 0; i < mcqList.length; i++) {
+        const col = i < mcqPerCol ? 0 : 1, row = i % mcqPerCol;
+        slots.push({ it: mcqList[i], kind: "mcq", col: col, cy: topMcqY + mcqStepY * (row + 0.5), rx: OMR_RANGE_COL_X[col], stepY: mcqStepY, radius: mcqRadius });
+      }
+      const dividerY = Math.round(topMcqY + mcqPerCol * mcqStepY + 12);
+      const subjStartY = dividerY + 30, subjAvailH = Math.max(90, 1046 - subjStartY);
+      const subjStepY = Math.min(156, subjAvailH / Math.max(1, subjCnt));
+      const subjBoxH = Math.max(46, Math.min(140, subjStepY - 10));
+      for (let j = 0; j < subjCnt; j++) {
+        const cy = subjStartY + subjStepY * (j + 0.5);
+        slots.push({ it: subjList[j], kind: "subj", col: 0, cy: cy, rx: OMR_RANGE_COL_X[0], bx0: 136, by0: cy - subjBoxH / 2, bw: 596, bh: subjBoxH, stepY: subjStepY, radius: 13 });
+      }
+      return { slots: slots };
     }
 
     function cropSubjStrip_(sx, sy, sw, sh, scale) {
-      const sc = scale || 2;
+      const sc = Math.min(scale || 1.6, 480 / Math.max(1, sw));
       const cw = Math.max(1, Math.round(sw * sc));
       const ch = Math.max(1, Math.round(sh * sc));
       const c = document.createElement("canvas");
@@ -1146,7 +1177,98 @@
     const subjCrops = {};
     const subjPendingNos = [];
     let warnCount = 0;
-    const innerRad = spec.radius * 0.72;
+    const isV2Spacious = Boolean(qrMeta && qrMeta.isV2Spacious);
+    let rangeMarked = false;
+    let ranges = [[fromNo, toNo]];
+    let effFromNo = fromNo, effToNo = toNo;
+
+    if (isV2Spacious) {
+      const lay = getOmrV2Layout_(rangeItems);
+      const rSamp = lay.slots.map(function(sl) {
+        const pLum = Math.max(75, sampleLum_(sl.rx - 14, sl.cy, 3));
+        return { n: sl.it.n, rx: sl.rx, cy: sl.cy, sc: measureDark_(sl.rx, sl.cy, 5.8, pLum) };
+      });
+      const rSrt = rSamp.map(function(x) { return x.sc; }).sort(function(a, b) { return a - b; });
+      const rBs = rSrt.length ? rSrt[Math.floor(rSrt.length * 0.25)] : 0;
+      const rChk = rSamp.filter(function(s) { return (s.sc - rBs) >= 0.22 && s.sc >= 0.30; });
+      rangeMarked = rChk.length >= 1;
+      ranges = rangeMarked ? buildRangesFromCheckedNos_(rChk.map(function(r) { return r.n; }), fromNo, toNo) : [[fromNo, toNo]];
+      effFromNo = ranges[0][0]; effToNo = ranges[ranges.length - 1][1];
+      if (rangeMarked) rChk.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - 9.5, rc.cy - 9.5, 19, 19); });
+
+      lay.slots.forEach(function(sl) {
+        const it = sl.it;
+        if (!isInRanges_(it.n, ranges)) {
+          pCtx.fillStyle = "rgba(148,163,184,0.28)";
+          if (sl.kind === "subj") pCtx.fillRect(sl.bx0, sl.by0, sl.bw, sl.bh);
+          else pCtx.fillRect(sl.col === 0 ? 72 : 416, sl.cy - sl.stepY / 2 + 2, 314, sl.stepY - 4);
+          return;
+        }
+        if (sl.kind === "subj") {
+          const sx = Math.max(0, Math.round(sl.bx0)), sy = Math.max(0, Math.round(sl.by0));
+          const sw = Math.min(OMR_W - sx, Math.round(sl.bw)), sh = Math.min(OMR_H - sy, Math.round(sl.bh));
+          subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 1.4);
+          subjPendingNos.push(it.n);
+          pCtx.save(); pCtx.strokeStyle = "#6366f1"; pCtx.lineWidth = 2.5; pCtx.setLineDash([6, 4]);
+          pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
+          pCtx.fillStyle = "rgba(99,102,241,0.07)"; pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+          pCtx.setLineDash([]); pCtx.fillStyle = "#4f46e5"; pCtx.font = "800 11px sans-serif"; pCtx.textAlign = "right";
+          pCtx.fillText("✍️단답(넉넉형)", sx + sw - 6, sy + 14); pCtx.restore();
+          return;
+        }
+        const iRad = sl.radius * 0.72;
+        const pLum = Math.max(75, (sampleLum_(OMR_COL_X[sl.col][0] + 24, sl.cy, 4) + sampleLum_(OMR_COL_X[sl.col][2] + 24, sl.cy, 4)) / 2);
+        const scores = [];
+        for (let b = 0; b < 5; b++) scores.push({ b: b, bx: OMR_COL_X[sl.col][b], sc: measureDark_(OMR_COL_X[sl.col][b], sl.cy, iRad, pLum) });
+        const sorted = scores.slice().sort(function(a, b) { return a.sc - b.sc; });
+        const baseSc = (sorted[0].sc + sorted[1].sc) / 2;
+        const marked = [];
+        scores.forEach(function(s) { const dl = s.sc - baseSc; if (dl >= 0.165 || s.sc >= 0.42) marked.push({ b: s.b, bx: s.bx, dl: dl, sc: s.sc }); });
+        marked.sort(function(a, b) { return b.dl - a.dl; });
+        let val = "", isWarn = false;
+        if (marked.length > 0) {
+          if (it.t === "multi") val = marked.map(function(m) { return String(m.b + 1); }).sort().join(",");
+          else if (marked.length >= 2 && marked[1].dl > marked[0].dl * 0.68 && marked[1].dl > 0.22) { val = marked.slice(0, 2).map(function(m) { return String(m.b + 1); }).sort().join(","); isWarn = true; }
+          else val = String(marked[0].b + 1);
+        }
+        if (val) answers[String(it.n)] = val;
+        if (isWarn) warnCount++;
+        const corNorm = normAns_(it.a, it.t);
+        const isOk = val ? (val === corNorm) : false;
+        pCtx.lineWidth = 3.5;
+        if (val) marked.forEach(function(mk) { pCtx.beginPath(); pCtx.arc(mk.bx, sl.cy, sl.radius + 3, 0, Math.PI * 2); pCtx.strokeStyle = isWarn ? "#f59e0b" : (isOk ? "#10b981" : "#ef4444"); pCtx.stroke(); });
+        if (!isOk && corNorm) {
+          corNorm.split(",").forEach(function(cd) {
+            const ci = Number(cd) - 1;
+            if (ci >= 0 && ci < 5) { pCtx.beginPath(); pCtx.arc(OMR_COL_X[sl.col][ci], sl.cy, sl.radius - 2, 0, Math.PI * 2); pCtx.strokeStyle = "#2563eb"; pCtx.lineWidth = 2.5; pCtx.stroke(); }
+          });
+        }
+      });
+    } else {
+      const totalSlots = Math.min(spec.perCol * 2, rangeItems.length);
+      // [□ 구간] 다중 구간 체크박스 판독 (예: 1·24·30·35·47 → 1~24, 30~35, 47~끝까지!)
+      const rangeRad = spec.is70 ? 4.4 : (spec.is50 ? 5.2 : 6.8);
+      const rangeSamples = [];
+      for (let idx = 0; idx < totalSlots; idx++) {
+        const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
+        const cy = spec.startY + row * spec.stepY, rx = OMR_RANGE_COL_X[col];
+        const paperLum = Math.max(75, (sampleLum_(rx - 14, cy, 3) + sampleLum_(OMR_COL_X[col][0] + 24, cy, 4)) / 2);
+        rangeSamples.push({ n: it.n, rx: rx, cy: cy, sc: measureDark_(rx, cy, rangeRad, paperLum) });
+      }
+      const rSorted = rangeSamples.map(function(x) { return x.sc; }).sort(function(a, b) { return a - b; });
+      const rBase = rSorted.length ? rSorted[Math.floor(rSorted.length * 0.25)] : 0;
+      const rangeChecked = rangeSamples.filter(function(s) { return (s.sc - rBase) >= 0.22 && s.sc >= 0.30; });
+      rangeMarked = rangeChecked.length >= 1;
+      ranges = rangeMarked
+        ? buildRangesFromCheckedNos_(rangeChecked.map(function(r) { return r.n; }), fromNo, toNo)
+        : [[fromNo, toNo]];
+      effFromNo = ranges[0][0];
+      effToNo = ranges[ranges.length - 1][1];
+      if (rangeMarked) {
+        const bh = spec.is70 ? 7.5 : (spec.is50 ? 9 : 11);
+        rangeChecked.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - bh, rc.cy - bh, bh * 2, bh * 2); });
+      }
+      const innerRad = spec.radius * 0.72;
     for (let idx = 0; idx < totalSlots; idx++) {
       const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
       const cy = spec.startY + row * spec.stepY;
@@ -1211,6 +1333,7 @@
         });
       }
     }
+    } // end else (V1 legacy)
 
     const thumb = document.createElement("canvas");
     thumb.width = 400; thumb.height = 560;
