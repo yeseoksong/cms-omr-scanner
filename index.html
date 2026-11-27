@@ -206,6 +206,29 @@
     .bub.ans-hint { border-color: #34d399; color: #6ee7b7; }
     .bub.picked.ok { background: #10b981; border-color: #10b981; color: #fff; }
     .bub.picked.bad { background: #ef4444; border-color: #ef4444; color: #fff; }
+    .ans-row.subj-row { flex-direction: column; align-items: stretch; gap: 5px; padding: 7px 8px; }
+    .ans-row.subj-row.pend { background: rgba(99,102,241,0.16); border-color: rgba(129,140,248,0.55); }
+    .subj-top { display: flex; align-items: center; justify-content: space-between; gap: 5px; flex-wrap: wrap; }
+    .subj-cor {
+      font-size: 10.5px; font-weight: 800; color: #93c5fd;
+      background: rgba(37,99,235,0.22); border: 1px solid rgba(96,165,250,0.45);
+      border-radius: 5px; padding: 1px 6px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .subj-crop-wrap { width: 100%; border-radius: 6px; overflow: hidden; border: 1px solid rgba(148,163,184,0.45); background: #fff; }
+    .subj-crop { display: block; width: 100%; height: 42px; object-fit: contain; background: #fff; cursor: zoom-in; transition: height 0.14s ease; }
+    .subj-crop.exp { height: 76px; cursor: zoom-out; }
+    .subj-inp {
+      width: 100%; height: 28px; padding: 0 8px; border-radius: 6px;
+      border: 1px solid rgba(148,163,184,0.45); background: #0f172a; color: #f8fafc;
+      font-size: 12px; font-weight: 800;
+    }
+    .subj-inp:focus { outline: none; border-color: #818cf8; box-shadow: 0 0 0 2px rgba(129,140,248,0.25); }
+    .subj-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+      padding: 8px 10px; border-radius: 9px; margin-bottom: 8px;
+      background: rgba(79,70,229,0.2); border: 1px solid rgba(129,140,248,0.45);
+      font-size: 11.5px; color: #e0e7ff;
+    }
   </style>
 </head>
 <body>
@@ -416,14 +439,78 @@
     return false;
   }
 
+  function matchSubjShortAns_(stuRaw, corRaw) {
+    const s0 = String(stuRaw == null ? "" : stuRaw).trim();
+    const c0 = String(corRaw == null ? "" : corRaw).trim();
+    if (!s0 || !c0) return false;
+    const cleanAtom_ = function(str) {
+      let x = String(str || "").trim().toLowerCase();
+      x = x.replace(/[−–—﹣－]/g, "-")
+        .replace(/[＋]/g, "+")
+        .replace(/[＝]/g, "=")
+        .replace(/[／÷]/g, "/")
+        .replace(/[×·∙]/g, "*")
+        .replace(/[：]/g, ":")
+        .replace(/[°˚º]/g, "")
+        .replace(/²/g, "^2").replace(/³/g, "^3")
+        .replace(/π|파이|pi/gi, "pi")
+        .replace(/\s+/g, "");
+      x = x.replace(/([0-9]|pi|\))(cm\^?[23]|cm|mm|m\^?[23]|km|m|도|개|원|초후|초|분|시간|가지|명|번|배|회|점)$/i, "$1");
+      if (/^(?:[a-z]|답|정답|∠[a-z]+)=[+-]?\d/.test(x)) {
+        x = x.replace(/^(?:[a-z]|답|정답|∠[a-z]+)=/, "");
+      }
+      return x;
+    };
+    const parseNum_ = function(atom) {
+      const fm = atom.match(/^([+-]?\d+(?:\.\d+)?)\/([+-]?\d+(?:\.\d+)?)$/);
+      if (fm) { const den = Number(fm[2]); return den !== 0 ? (Number(fm[1]) / den) : NaN; }
+      if (/^[+-]?\d+(?:\.\d+)?$/.test(atom)) return Number(atom);
+      const pm1 = atom.match(/^([+-]?\d*(?:\.\d+)?)pi\/(\d+(?:\.\d+)?)$/);
+      if (pm1) { const num = (pm1[1] === "" || pm1[1] === "+") ? 1 : (pm1[1] === "-" ? -1 : Number(pm1[1])); const den = Number(pm1[2]); return den !== 0 ? (num / den) * Math.PI : NaN; }
+      const pm2 = atom.match(/^([+-]?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)pi$/);
+      if (pm2) { const den = Number(pm2[2]); return den !== 0 ? (Number(pm2[1]) / den) * Math.PI : NaN; }
+      const pm3 = atom.match(/^([+-]?\d*(?:\.\d+)?)pi$/);
+      if (pm3) { const num = (pm3[1] === "" || pm3[1] === "+") ? 1 : (pm3[1] === "-" ? -1 : Number(pm3[1])); return num * Math.PI; }
+      return NaN;
+    };
+    const atomsEq_ = function(a, b) {
+      const ca = cleanAtom_(a), cb = cleanAtom_(b);
+      if (!ca || !cb) return false;
+      if (ca === cb || ca.replace(/[()]/g, "") === cb.replace(/[()]/g, "")) return true;
+      const na = parseNum_(ca), nb = parseNum_(cb);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return Math.abs(na - nb) < 1e-6;
+      return false;
+    };
+    if (atomsEq_(s0, c0)) return true;
+    if (/또는|\bor\b/i.test(c0) && !/\(\d/.test(c0)) {
+      const cP = c0.split(/또는|\bor\b|,|;/i).map(function(v) { return v.trim(); }).filter(Boolean);
+      const sP = s0.split(/또는|\bor\b|,|;|\s+/i).map(function(v) { return v.trim(); }).filter(Boolean);
+      if (cP.length >= 2 && sP.length === cP.length) {
+        const used = {};
+        if (cP.every(function(cp) { for (let i = 0; i < sP.length; i++) { if (!used[i] && atomsEq_(sP[i], cp)) { used[i] = true; return true; } } return false; })) return true;
+      }
+    }
+    if (/\(\d+(?:-\d+)?\)/.test(c0)) {
+      const splitS = function(str) { return String(str || "").split(/\(\d+(?:-\d+)?\)/).map(function(v) { return v.trim(); }).filter(Boolean); };
+      const cS = splitS(c0);
+      const sS = /\(\d+(?:-\d+)?\)/.test(s0) ? splitS(s0) : s0.split(/[,;]+/).map(function(v) { return v.trim(); }).filter(Boolean);
+      if (cS.length >= 2 && sS.length === cS.length) {
+        let ok = true;
+        for (let i = 0; i < cS.length; i++) { if (!atomsEq_(sS[i], cS[i])) { ok = false; break; } }
+        if (ok) return true;
+      }
+    }
+    return false;
+  }
+
   function normAns_(raw, qType) {
     const s = String(raw == null ? "" : raw).trim().toUpperCase();
     if (!s) return "";
     if (qType === "subj") {
-      if (s === "O" || s === "○" || s === "1") return "O";
-      if (s === "△" || s === "▲" || s === "2") return "△";
-      if (s === "X" || s === "✕" || s === "3" || s === "0") return "X";
-      return s;
+      if (s === "O" || s === "○" || s === "정답") return "O";
+      if (s === "△" || s === "▲" || s === "부분") return "△";
+      if (s === "X" || s === "✕" || s === "오답") return "X";
+      return String(raw == null ? "" : raw).trim();
     }
     if (s === "X" || s === "✕" || s === "미풀이" || s === "오답") return "X";
     const digits = s.match(/[1-5]/g);
@@ -436,6 +523,7 @@
 
   function gradeLocal_(secKey, amap, rangesOrFrom, toNo) {
     const items = S.itemsBySec[secKey] || [];
+    const mapObj = amap || {};
     const ranges = Array.isArray(rangesOrFrom)
       ? rangesOrFrom
       : ((rangesOrFrom && toNo) ? [[rangesOrFrom, toNo]] : null);
@@ -444,12 +532,16 @@
     items.forEach(function(it) {
       if (ranges && !isInRanges_(it.n, ranges)) return;
       rangeCount++;
-      const stu = normAns_((amap || {})[String(it.n)], it.t);
-      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, stu: "", status: "blank" }); return; }
+      const stuText = it.t === "subj" ? String(mapObj["t_" + it.n] || "").trim() : "";
+      let stu = normAns_(mapObj[String(it.n)], it.t);
+      if (it.t === "subj" && stu && stu !== "O" && stu !== "△" && stu !== "X") {
+        stu = matchSubjShortAns_(stu, it.a) ? "O" : "X";
+      }
+      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: "", stuText: stuText, status: "blank" }); return; }
       solved++;
       const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
       if (isOk) correct++; else wrong++;
-      perItem.push({ n: it.n, t: it.t, cor: it.a, stu: stu, status: isOk ? "ok" : "bad" });
+      perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: stu, stuText: stuText, status: isOk ? "ok" : "bad" });
     });
     const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
     return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
@@ -460,14 +552,15 @@
     if (!ws || !Array.isArray(ws.items)) return [];
     return ws.items.map(function(mp, i) {
       const secItems = S.itemsBySec[mp.s] || [];
-      const orig = secItems.find(function(x) { return Number(x.n) === Number(mp.n); }) || { n: mp.n, t: "mcq", a: "" };
+      const orig = secItems.find(function(x) { return Number(x.n) === Number(mp.n); }) || { n: mp.n, t: "mcq", a: "", d: "" };
       const meta = getSecMeta_(mp.s);
-      return { n: i + 1, t: orig.t || "mcq", a: orig.a || "", origSecKey: mp.s, origQno: mp.n, origLbl: (meta.shortLbl || mp.s) + " " + mp.n };
+      return { n: i + 1, t: orig.t || "mcq", a: orig.a || "", d: orig.d || orig.a || "", origSecKey: mp.s, origQno: mp.n, origLbl: (meta.shortLbl || mp.s) + " " + mp.n };
     });
   }
 
   function gradeWrongSetLocal_(setId, amap, rangesOrFrom, toNo) {
     const items = getWrongSetVirtualItems_(setId);
+    const mapObj = amap || {};
     const ranges = Array.isArray(rangesOrFrom)
       ? rangesOrFrom
       : ((rangesOrFrom && toNo) ? [[rangesOrFrom, toNo]] : null);
@@ -476,12 +569,16 @@
     items.forEach(function(it) {
       if (ranges && !isInRanges_(it.n, ranges)) return;
       rangeCount++;
-      const stu = normAns_((amap || {})[String(it.n)], it.t);
-      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, stu: "", status: "blank", origLbl: it.origLbl }); return; }
+      const stuText = it.t === "subj" ? String(mapObj["t_" + it.n] || "").trim() : "";
+      let stu = normAns_(mapObj[String(it.n)], it.t);
+      if (it.t === "subj" && stu && stu !== "O" && stu !== "△" && stu !== "X") {
+        stu = matchSubjShortAns_(stu, it.a) ? "O" : "X";
+      }
+      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: "", stuText: stuText, status: "blank", origLbl: it.origLbl }); return; }
       solved++;
       const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
       if (isOk) correct++; else wrong++;
-      perItem.push({ n: it.n, t: it.t, cor: it.a, stu: stu, status: isOk ? "ok" : "bad", origLbl: it.origLbl });
+      perItem.push({ n: it.n, t: it.t, cor: it.a, disp: it.d || it.a, stu: stu, stuText: stuText, status: isOk ? "ok" : "bad", origLbl: it.origLbl });
     });
     const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
     return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
@@ -490,8 +587,14 @@
   function filterAnsToRanges_(amap, ranges) {
     const out = {};
     Object.keys(amap || {}).forEach(function(k) {
+      if (!amap[k]) return;
+      if (k.indexOf("t_") === 0) {
+        const tn = Number(k.slice(2));
+        if (Number.isFinite(tn) && isInRanges_(tn, ranges)) out[k] = amap[k];
+        return;
+      }
       const n = Number(k);
-      if (isInRanges_(n, ranges) && amap[k]) out[String(n)] = amap[k];
+      if (Number.isFinite(n) && isInRanges_(n, ranges)) out[String(n)] = amap[k];
     });
     return out;
   }
@@ -980,7 +1083,42 @@
       rangeChecked.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - bh, rc.cy - bh, bh * 2, bh * 2); });
     }
 
+    function cropSubjStrip_(sx, sy, sw, sh, scale) {
+      const sc = scale || 2;
+      const cw = Math.max(1, Math.round(sw * sc));
+      const ch = Math.max(1, Math.round(sh * sc));
+      const c = document.createElement("canvas");
+      c.width = cw; c.height = ch;
+      const g = c.getContext("2d", { willReadFrequently: true });
+      g.fillStyle = "#ffffff";
+      g.fillRect(0, 0, cw, ch);
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = "high";
+      g.drawImage(warpedCanvas, sx, sy, sw, sh, 0, 0, cw, ch);
+      try {
+        const id = g.getImageData(0, 0, cw, ch);
+        const d = id.data;
+        const lums = [];
+        for (let i = 0; i < d.length; i += 16) lums.push((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8);
+        lums.sort(function(a, b) { return a - b; });
+        const whitePt = Math.max(145, lums[Math.floor(lums.length * 0.88)] || 230);
+        const blackPt = Math.min(whitePt - 55, Math.max(18, (lums[Math.floor(lums.length * 0.02)] || 25) - 6));
+        const span = Math.max(45, whitePt - blackPt);
+        for (let i = 0; i < d.length; i += 4) {
+          for (let ci = 0; ci < 3; ci++) {
+            let v = (d[i + ci] - blackPt) / span;
+            if (v < 0) v = 0; else if (v > 1) v = 1;
+            d[i + ci] = Math.round(Math.pow(v, 1.18) * 255);
+          }
+        }
+        g.putImageData(id, 0, 0);
+      } catch (_) {}
+      return c.toDataURL("image/jpeg", 0.90);
+    }
+
     const answers = {};
+    const subjCrops = {};
+    const subjPendingNos = [];
     let warnCount = 0;
     const innerRad = spec.radius * 0.72;
     for (let idx = 0; idx < totalSlots; idx++) {
@@ -991,20 +1129,43 @@
         pCtx.fillRect(col === 0 ? 72 : 416, cy - spec.stepY / 2 + 2, 314, spec.stepY - 4);
         continue;
       }
-      const isSubj = it.t === "subj", optCnt = isSubj ? 3 : 5;
+      const isSubj = it.t === "subj";
+      if (isSubj) {
+        const sx = col === 0 ? 136 : 488;
+        const sw = 256;
+        const halfH = Math.round(Math.max(15, spec.stepY * 0.56));
+        const sy = Math.max(0, Math.round(cy - halfH));
+        const sh = Math.min(OMR_H - sy, halfH * 2);
+        subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 2);
+        subjPendingNos.push(it.n);
+        pCtx.save();
+        pCtx.strokeStyle = "#6366f1";
+        pCtx.lineWidth = 2.5;
+        pCtx.setLineDash([6, 4]);
+        pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
+        pCtx.fillStyle = "rgba(99,102,241,0.10)";
+        pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+        pCtx.setLineDash([]);
+        pCtx.fillStyle = "#4f46e5";
+        pCtx.font = "800 11px sans-serif";
+        pCtx.textAlign = "right";
+        pCtx.fillText("✍️단답", sx + sw - 6, sy + 13);
+        pCtx.restore();
+        continue;
+      }
+      const optCnt = 5;
       const paperLum = Math.max(75, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
       const scores = [];
       for (let b = 0; b < optCnt; b++) scores.push({ b: b, bx: OMR_COL_X[col][b], sc: measureDark_(OMR_COL_X[col][b], cy, innerRad, paperLum) });
       const sorted = scores.slice().sort(function(a, b) { return a.sc - b.sc; });
-      const baseSc = optCnt >= 4 ? (sorted[0].sc + sorted[1].sc) / 2 : sorted[0].sc;
+      const baseSc = (sorted[0].sc + sorted[1].sc) / 2;
       const marked = [];
       scores.forEach(function(s) { const dl = s.sc - baseSc; if (dl >= 0.165 || s.sc >= 0.42) marked.push({ b: s.b, bx: s.bx, dl: dl, sc: s.sc }); });
       marked.sort(function(a, b) { return b.dl - a.dl; });
 
       let val = "", isWarn = false;
       if (marked.length > 0) {
-        if (isSubj) { val = ["O","△","X"][marked[0].b] || "X"; if (marked.length >= 2 && marked[1].dl > marked[0].dl * 0.7) isWarn = true; }
-        else if (it.t === "multi") { val = marked.map(function(m) { return String(m.b + 1); }).sort().join(","); }
+        if (it.t === "multi") { val = marked.map(function(m) { return String(m.b + 1); }).sort().join(","); }
         else {
           if (marked.length >= 2 && marked[1].dl > marked[0].dl * 0.68 && marked[1].dl > 0.22) { val = marked.slice(0, 2).map(function(m) { return String(m.b + 1); }).sort().join(","); isWarn = true; }
           else val = String(marked[0].b + 1);
@@ -1014,10 +1175,10 @@
       if (isWarn) warnCount++;
 
       const corNorm = normAns_(it.a, it.t);
-      const isOk = val ? (isSubj ? val === "O" : val === corNorm) : false;
+      const isOk = val ? (val === corNorm) : false;
       pCtx.lineWidth = 3.5;
       if (val) marked.forEach(function(mk) { pCtx.beginPath(); pCtx.arc(mk.bx, cy, spec.radius + 3, 0, Math.PI * 2); pCtx.strokeStyle = isWarn ? "#f59e0b" : (isOk ? "#10b981" : "#ef4444"); pCtx.stroke(); });
-      if (!isOk && !isSubj && corNorm) {
+      if (!isOk && corNorm) {
         corNorm.split(",").forEach(function(cd) {
           const ci = Number(cd) - 1;
           if (ci >= 0 && ci < 5) { pCtx.beginPath(); pCtx.arc(OMR_COL_X[col][ci], cy, spec.radius - 2, 0, Math.PI * 2); pCtx.strokeStyle = "#2563eb"; pCtx.lineWidth = 2.5; pCtx.stroke(); }
@@ -1038,7 +1199,8 @@
       qrMetaRef: missingWrongSet ? qrMeta : null,
       erpId: erpId, secKey: secKey,
       fromNo: effFromNo, toNo: effToNo, ranges: ranges, rangeMarked: rangeMarked,
-      answers: answers, warnCount: warnCount, previewUrl: thumb.toDataURL("image/jpeg", 0.78)
+      answers: answers, subjCrops: subjCrops, subjPendingNos: subjPendingNos,
+      warnCount: warnCount, previewUrl: thumb.toDataURL("image/jpeg", 0.78)
     };
   }
 
@@ -1427,6 +1589,9 @@
     const graded = isWrongRetest
       ? gradeWrongSetLocal_(parsed.wrongSetId, parsed.answers, ranges)
       : gradeLocal_(parsed.secKey, parsed.answers, ranges);
+    const subjCrops = (parsed.subjCrops && typeof parsed.subjCrops === "object") ? parsed.subjCrops : {};
+    const subjPendingNos = Array.isArray(parsed.subjPendingNos) ? parsed.subjPendingNos.slice() : [];
+    const hasPendSubj = subjPendingNos.length > 0;
     const item = {
       id: "D_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 5),
       erpId: stu ? stu.erpId : "",
@@ -1441,7 +1606,12 @@
       rangeMarked: Boolean(parsed.rangeMarked),
       qrFound: Boolean(parsed.qrFound),
       qrMissing: qrMissing,
-      answers: parsed.answers, graded: graded,
+      answers: parsed.answers,
+      subjCrops: subjCrops,
+      subjPendingNos: subjPendingNos,
+      ocrBusy: false,
+      ocrMsg: hasPendSubj ? ("서술형 단답 " + subjPendingNos.length + "문항 확인 필요") : "",
+      graded: graded,
       method: isWrongRetest ? "직통오답OMR재채점" : method, previewUrl: parsed.previewUrl || "",
       warnCount: parsed.warnCount || 0, saved: false, saving: false,
       savedKey: null
@@ -1458,6 +1628,9 @@
       if (qrMissing || !stu) {
         bn.style.background = "rgba(217, 119, 6, 0.94)";
         bn.innerHTML = '<span>⚠️ QR 미인식 · 자동저장 차단됨! 오른쪽에서 학생·교재 선택 후 저장하세요</span><span style="font-size:11px;">재스캔 가능</span>';
+      } else if (hasPendSubj) {
+        bn.style.background = "rgba(79, 70, 229, 0.95)";
+        bn.innerHTML = '<span>✍️ ' + esc_(item.name) + ' · 서술형 단답 ' + subjPendingNos.length + '문항 감지 — 오른쪽에서 단답 확인/OCR 후 [💾 저장]하세요</span><span style="font-size:11px;">자동저장 보류</span>';
       } else if (isWrongRetest) {
         bn.style.background = "rgba(109, 40, 217, 0.95)";
         bn.innerHTML = '<span>🎯 ' + esc_(item.name) + ' 오답 재채점 (' + esc_(formatRanges_(ranges)) + '번) · <strong>해결 ' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong></span><span style="font-size:11px; opacity:0.9;">오답해결 자동반영</span>';
@@ -1467,9 +1640,11 @@
       }
       bn.classList.add("show");
       clearTimeout(bn._tm);
-      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, (qrMissing || !stu) ? 4500 : 2800);
+      bn._tm = setTimeout(function() { bn.classList.remove("show"); }, (qrMissing || !stu || hasPendSubj) ? 4800 : 2800);
     }
     renderRight_();
+    // 서술형 단답이 포함된 경우 확인 전 자동저장 보류!
+    if (hasPendSubj) return;
     // QR로 학생·교재가 정확히 확인된 경우에만 자동 저장! (오저장 원천 차단)
     if (S.autoSave && !qrMissing && !isBlankCard && stu && graded.solved > 0) saveItem_(item.id, true);
   }
@@ -1656,6 +1831,7 @@
     const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
     const items = q.isWrongRetest ? getWrongSetVirtualItems_(q.wrongSetId) : (S.itemsBySec[q.secKey] || []);
     items.forEach(function(it) { if (isInRanges_(it.n, rgs) && !q.answers[String(it.n)]) q.answers[String(it.n)] = "X"; });
+    q.subjPendingNos = [];
     q.saved = false; renderRight_();
   };
   window.toggleAns_ = function(id, n, opt, qt) {
@@ -1667,7 +1843,111 @@
       if (idx >= 0) a.splice(idx, 1); else a.push(opt);
       a.sort(); if (a.length) q.answers[k] = a.join(","); else delete q.answers[k];
     } else { if (cur === opt) delete q.answers[k]; else q.answers[k] = opt; }
+    if (qt === "subj" && Array.isArray(q.subjPendingNos)) {
+      q.subjPendingNos = q.subjPendingNos.filter(function(x) { return Number(x) !== Number(n); });
+    }
     q.saved = false; renderRight_();
+  };
+  window.setSubjText_ = function(id, n, rawTxt) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
+    const k = String(n), txt = String(rawTxt == null ? "" : rawTxt).trim().slice(0, 80);
+    if (!txt) { delete q.answers[k]; delete q.answers["t_" + k]; }
+    else {
+      const up = txt.toUpperCase();
+      if (up === "O" || up === "○") { q.answers[k] = "O"; delete q.answers["t_" + k]; }
+      else if (up === "X" || up === "✕") { q.answers[k] = "X"; delete q.answers["t_" + k]; }
+      else if (up === "△" || up === "▲") { q.answers[k] = "△"; delete q.answers["t_" + k]; }
+      else {
+        const items = q.isWrongRetest ? getWrongSetVirtualItems_(q.wrongSetId) : (S.itemsBySec[q.secKey] || []);
+        const it = items.find(function(x) { return Number(x.n) === Number(n); });
+        q.answers["t_" + k] = txt;
+        q.answers[k] = matchSubjShortAns_(txt, it ? (it.a || it.d || "") : "") ? "O" : "X";
+      }
+    }
+    if (Array.isArray(q.subjPendingNos)) q.subjPendingNos = q.subjPendingNos.filter(function(x) { return Number(x) !== Number(n); });
+    q.saved = false; renderRight_();
+  };
+
+  let TESS_WORKER_ = null;
+  async function ensureTesseractWorker_() {
+    if (TESS_WORKER_) return TESS_WORKER_;
+    if (!window.Tesseract) {
+      await new Promise(function(res, rej) {
+        const sc = document.createElement("script");
+        sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        sc.onload = res; sc.onerror = rej;
+        document.head.appendChild(sc);
+      });
+    }
+    TESS_WORKER_ = await window.Tesseract.createWorker("eng");
+    await TESS_WORKER_.setParameters({ tessedit_char_whitelist: "0123456789/.-=xyab:,()", tessedit_pageseg_mode: "7" });
+    return TESS_WORKER_;
+  }
+  function prepCropForOcr_(dataUrl) {
+    return new Promise(function(resolve) {
+      const im = new Image();
+      im.onload = function() {
+        const cv = document.createElement("canvas");
+        cv.width = im.width; cv.height = im.height;
+        const ctx = cv.getContext("2d", { willReadFrequently: true });
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(im, 0, 0);
+        try {
+          const id = ctx.getImageData(0, 0, cv.width, cv.height);
+          const d = id.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const r = d[i], g = d[i + 1], b = d[i + 2];
+            const lum = (r * 77 + g * 150 + b * 29) >> 8;
+            // 컬러 인쇄 구형 OMR의 연보라(#6366f1) 인쇄선은 OCR 시 흰색으로 억제
+            const isPrintedIndigo = (b - r > 32 && b - g > 20 && lum > 85);
+            const v = (isPrintedIndigo || lum > 168) ? 255 : 0;
+            d[i] = d[i + 1] = d[i + 2] = v;
+          }
+          ctx.putImageData(id, 0, 0);
+        } catch (_) {}
+        resolve(cv.toDataURL("image/png"));
+      };
+      im.onerror = function() { resolve(dataUrl); };
+      im.src = dataUrl;
+    });
+  }
+  window.runSubjOcr_ = async function(id) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q || q.ocrBusy) return;
+    const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
+    const items = (q.isWrongRetest ? getWrongSetVirtualItems_(q.wrongSetId) : (S.itemsBySec[q.secKey] || []))
+      .filter(function(it) { return it.t === "subj" && isInRanges_(it.n, rgs) && q.subjCrops && q.subjCrops[String(it.n)]; });
+    if (!items.length) { showTopToast_("인식할 서술형 필기 이미지가 없습니다.", "warn"); return; }
+    q.ocrBusy = true;
+    q.ocrMsg = "🔍 오프라인 숫자·분수 OCR 엔진 로드 중...";
+    renderRight_();
+    try {
+      const worker = await ensureTesseractWorker_();
+      let hit = 0;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        q.ocrMsg = "🔍 서술형 단답 판독 중 (" + (i + 1) + "/" + items.length + ")...";
+        const stEl = document.getElementById("subjOcrTxt_" + q.id);
+        if (stEl) stEl.textContent = q.ocrMsg;
+        const pre = await prepCropForOcr_(q.subjCrops[String(it.n)]);
+        const res = await worker.recognize(pre);
+        const raw = String((res && res.data && res.data.text) || "").replace(/\s+/g, "").replace(/[^0-9/.\-=xyab:,()]/gi, "").trim();
+        if (raw && /[0-9]/.test(raw)) {
+          q.answers["t_" + it.n] = raw;
+          q.answers[String(it.n)] = matchSubjShortAns_(raw, it.a || it.d || "") ? "O" : "X";
+          hit++;
+        }
+      }
+      q.subjPendingNos = [];
+      q.ocrMsg = "✓ 숫자 OCR 완료 (" + hit + "/" + items.length + "문항 인식) — 필기 이미지를 보고 확인 후 저장하세요";
+      q.saved = false;
+      showTopToast_("✓ 서술형 숫자 OCR 완료 (" + hit + "문항)", "ok");
+    } catch (e) {
+      q.ocrMsg = "⚠️ OCR 로드 실패 — 아래 필기 이미지를 보고 단답을 직접 입력해 주세요.";
+      showTopToast_("OCR 오류: " + (e.message || e), "warn");
+    }
+    q.ocrBusy = false;
+    renderRight_();
   };
 
   function renderMain_() {
@@ -1768,12 +2048,15 @@
         const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
         const g = q.isWrongRetest ? gradeWrongSetLocal_(q.wrongSetId, q.answers, rgs) : gradeLocal_(q.secKey, q.answers, rgs);
         q.graded = g;
+        const hasPend = Array.isArray(q.subjPendingNos) && q.subjPendingNos.length > 0;
+        const stTxt = q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (hasPend ? ('✍️ 서술형 ' + q.subjPendingNos.length + '문항 확인') : (q.saved ? (q.isWrongRetest ? '✓ 오답해결 반영' : '✓ 출석부 저장됨') : '● 미저장')));
+        const stClr = q.qrMissing ? '#f87171' : (hasPend ? '#a5b4fc' : (q.saved ? '#34d399' : '#fbbf24'));
         h += '<div class="q-item ' + (act && act.id === q.id ? 'sel ' : '') + (q.saved ? 'saved' : 'unsaved') + '" onclick="selQ_(\'' + esc_(q.id) + '\')">' +
           '<div><div style="font-size:13px; font-weight:800; color:' + (q.isWrongRetest ? '#c4b5fd' : '#f8fafc') + ';">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
           '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + esc_(formatRanges_(rgs)) + '번</div></div>' +
           '<div style="display:flex; align-items:center; gap:7px;">' +
             '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + (q.isWrongRetest ? '해결 ' : '') + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
-            '<div style="font-size:10.5px; color:' + (q.qrMissing ? '#f87171' : (q.saved ? '#34d399' : '#fbbf24')) + ';">' + (q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (q.saved ? (q.isWrongRetest ? '✓ 오답해결 반영' : '✓ 출석부 저장됨') : '● 미저장'))) + '</div></div>' +
+            '<div style="font-size:10.5px; color:' + stClr + ';">' + stTxt + '</div></div>' +
             '<button type="button" class="btn sm" style="padding:4px 7px; background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.45); color:#fecaca;" title="저장된 기록 및 출석부 진도 삭제" onclick="event.stopPropagation(); deleteItem_(\'' + esc_(q.id) + '\')">🗑️</button>' +
           '</div>' +
         '</div>';
@@ -1813,11 +2096,50 @@
         '</div>' +
         (act.previewUrl ? '<details style="margin-bottom:8px;"><summary style="cursor:pointer; font-size:11.5px; font-weight:800; color:#7dd3fc;">🖼️ 원근보정 OMR 오버레이 보기</summary><img src="' + act.previewUrl + '" style="width:100%; max-width:280px; border-radius:8px; margin-top:6px; display:block;"></details>' : '');
 
+      const subjList = g.perItem.filter(function(pi) { return pi.t === "subj"; });
+      if (subjList.length > 0) {
+        const hasCrop = subjList.some(function(pi) { return Boolean(act.subjCrops && act.subjCrops[String(pi.n)]); });
+        h += '<div class="subj-bar">' +
+          '<div style="flex:1; min-width:0;">' +
+            '<div style="font-weight:900;">✍️ 서술형 단답 채점 (' + subjList.length + '문항)</div>' +
+            '<div id="subjOcrTxt_' + esc_(act.id) + '" style="font-size:11px; color:#c7d2fe; margin-top:2px;">' + esc_(act.ocrMsg || "필기 이미지를 보고 단답 입력(자동 동치채점) 또는 O/X를 탭한 뒤 [💾 저장]하세요.") + '</div>' +
+          '</div>' +
+          (hasCrop ? '<button type="button" class="btn pri sm" onclick="runSubjOcr_(\'' + esc_(act.id) + '\')"' + (act.ocrBusy ? ' disabled' : '') + '>🔍 필기 숫자 OCR</button>' : '') +
+        '</div>';
+      }
+
       const renderRow_ = function(pi) {
+        if (pi.t === "subj") {
+          const isPend = Array.isArray(act.subjPendingNos) && act.subjPendingNos.indexOf(pi.n) !== -1 && !pi.stu;
+          const rCls = pi.status === "ok" ? " ok" : (pi.status === "bad" ? " bad" : (isPend ? " pend" : ""));
+          const cropUrl = (act.subjCrops && act.subjCrops[String(pi.n)]) || "";
+          const corLbl = String(pi.disp || pi.cor || "").trim();
+          const opts = pi.stu === "△" ? ["O","△","X"] : ["O","X"];
+          let rh = '<div class="ans-row subj-row' + rCls + '">' +
+            '<div class="subj-top">' +
+              '<span style="display:inline-flex; align-items:center; gap:4px; min-width:0; flex:1;">' +
+                '<span class="ans-no">' + pi.n + '.</span>' +
+                (pi.origLbl ? '<span style="font-size:9.5px; font-weight:700; color:#c4b5fd; max-width:50px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc_(pi.origLbl) + '</span>' : '') +
+                (corLbl ? '<span class="subj-cor" title="정답: ' + esc_(corLbl) + '">정답: ' + esc_(corLbl) + '</span>' : '<span class="subj-cor">서술형</span>') +
+              '</span>' +
+              '<span style="display:inline-flex; gap:4px;">';
+          opts.forEach(function(o) {
+            const picked = pi.stu === o;
+            let cls = "bub";
+            if (picked) cls += " picked " + (o === "O" ? "ok" : "bad");
+            if (o === "O" && !picked) cls += " ans-hint";
+            rh += '<button type="button" class="' + cls + '" onclick="toggleAns_(\'' + esc_(act.id) + '\',' + pi.n + ',\'' + o + '\',\'subj\')">' + o + '</button>';
+          });
+          rh += '</span></div>';
+          if (cropUrl) rh += '<div class="subj-crop-wrap"><img class="subj-crop" src="' + cropUrl + '" onclick="this.classList.toggle(\'exp\')" title="탭하여 확대/축소"></div>';
+          rh += '<input type="text" class="subj-inp" value="' + esc_(pi.stuText || "") + '" placeholder="학생 단답 입력(예: 12, 10/3) → 자동채점" onchange="setSubjText_(\'' + esc_(act.id) + '\',' + pi.n + ',this.value)" onkeydown="if(event.key===\'Enter\'){this.blur();}">' +
+          '</div>';
+          return rh;
+        }
         const rCls = pi.status === "ok" ? " ok" : (pi.status === "bad" ? " bad" : "");
-        const corSet = pi.t === "subj" ? ["O"] : normAns_(pi.cor, pi.t).split(",");
+        const corSet = normAns_(pi.cor, pi.t).split(",");
         const stuSet = pi.stu ? pi.stu.split(",") : [];
-        const opts = pi.t === "subj" ? ["O","△","X"] : ["1","2","3","4","5","X"];
+        const opts = ["1","2","3","4","5","X"];
         let rh = '<div class="ans-row' + rCls + '"><span class="ans-no">' + pi.n + '.</span>' +
           (pi.origLbl ? '<span style="font-size:9.5px; font-weight:700; color:#c4b5fd; max-width:52px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc_(pi.origLbl) + '">' + esc_(pi.origLbl) + '</span>' : '');
         opts.forEach(function(o) {
