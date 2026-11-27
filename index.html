@@ -213,13 +213,15 @@
     .ans-row.subj-row.pend { background: rgba(99,102,241,0.16); border-color: rgba(129,140,248,0.55); }
     .subj-top { display: flex; align-items: center; justify-content: space-between; gap: 5px; flex-wrap: wrap; }
     .subj-cor {
-      font-size: 10.5px; font-weight: 800; color: #93c5fd;
-      background: rgba(37,99,235,0.22); border: 1px solid rgba(96,165,250,0.45);
-      border-radius: 5px; padding: 1px 6px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      display: block; width: 100%; box-sizing: border-box;
+      font-size: 11.5px; font-weight: 800; color: #bfdbfe;
+      background: rgba(37,99,235,0.22); border: 1px solid rgba(96,165,250,0.48);
+      border-radius: 6px; padding: 4px 8px; line-height: 1.42;
+      white-space: normal; word-break: keep-all; overflow-wrap: anywhere;
     }
     .subj-crop-wrap { width: 100%; border-radius: 6px; overflow: hidden; border: 1px solid rgba(148,163,184,0.45); background: #fff; }
-    .subj-crop { display: block; width: 100%; height: 42px; object-fit: contain; background: #fff; cursor: zoom-in; transition: height 0.14s ease; }
-    .subj-crop.exp { height: 76px; cursor: zoom-out; }
+    .subj-crop { display: block; width: 100%; height: auto; min-height: 44px; max-height: 76px; object-fit: contain; background: #fff; cursor: zoom-in; transition: max-height 0.14s ease; }
+    .subj-crop.exp { max-height: 150px; cursor: zoom-out; }
     .subj-inp {
       width: 100%; height: 28px; padding: 0 8px; border-radius: 6px;
       border: 1px solid rgba(148,163,184,0.45); background: #0f172a; color: #f8fafc;
@@ -238,7 +240,7 @@
 <div class="app-shell">
   <header class="topbar">
     <div class="brand">
-      <span>📷 CMS 직통 실시간 OMR 스캐너 <small style="opacity:0.75; font-size:10px; font-weight:700;">v2.4</small></span>
+      <span>📷 CMS 직통 실시간 OMR 스캐너 <small style="opacity:0.75; font-size:10px; font-weight:700;">v2.5</small></span>
       <span id="seasonBadge" class="pill">iframe 없음 · 전 기기 지원</span>
       <span id="syncBadge" class="pill ok" style="display:none;">출석부 실시간 연동</span>
     </div>
@@ -2301,10 +2303,10 @@
           const opts = pi.stu === "△" ? ["O","△","X"] : ["O","X"];
           let rh = '<div class="ans-row subj-row' + rCls + '">' +
             '<div class="subj-top">' +
-              '<span style="display:inline-flex; align-items:center; gap:4px; min-width:0; flex:1;">' +
+              '<span style="display:inline-flex; align-items:center; gap:5px; min-width:0; flex:1;">' +
                 '<span class="ans-no">' + pi.n + '.</span>' +
-                (pi.origLbl ? '<span style="font-size:9.5px; font-weight:700; color:#c4b5fd; max-width:50px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc_(pi.origLbl) + '</span>' : '') +
-                (corLbl ? '<span class="subj-cor" title="정답: ' + esc_(corLbl) + '">정답: ' + esc_(corLbl) + '</span>' : '<span class="subj-cor">서술형</span>') +
+                '<span style="font-size:11px; font-weight:800; color:#a5b4fc;">서술형</span>' +
+                (pi.origLbl ? '<span style="font-size:10px; font-weight:700; color:#c4b5fd;">' + esc_(pi.origLbl) + '</span>' : '') +
               '</span>' +
               '<span style="display:inline-flex; gap:4px;">';
           opts.forEach(function(o) {
@@ -2314,6 +2316,7 @@
             rh += '<button type="button" class="' + cls + '" onclick="toggleAns_(\'' + esc_(act.id) + '\',' + pi.n + ',\'' + o + '\',\'subj\')">' + o + '</button>';
           });
           rh += '</span></div>';
+          if (corLbl) rh += '<div class="subj-cor">정답: ' + esc_(corLbl) + '</div>';
           if (cropUrl) rh += '<div class="subj-crop-wrap"><img class="subj-crop" src="' + cropUrl + '" onclick="this.classList.toggle(\'exp\')" title="탭하여 확대/축소"></div>';
           rh += '<input type="text" class="subj-inp" value="' + esc_(pi.stuText || "") + '" placeholder="학생 단답 입력(예: 12, 10/3) → 자동채점" onchange="setSubjText_(\'' + esc_(act.id) + '\',' + pi.n + ',this.value)" onkeydown="if(event.key===\'Enter\'){this.blur();}">' +
           '</div>';
