@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>CMS 평촌 · 직통 실시간 OMR 스캐너</title>
@@ -235,7 +238,7 @@
 <div class="app-shell">
   <header class="topbar">
     <div class="brand">
-      <span>📷 CMS 직통 실시간 OMR 스캐너</span>
+      <span>📷 CMS 직통 실시간 OMR 스캐너 <small style="opacity:0.75; font-size:10px; font-weight:700;">v2.4</small></span>
       <span id="seasonBadge" class="pill">iframe 없음 · 전 기기 지원</span>
       <span id="syncBadge" class="pill ok" style="display:none;">출석부 실시간 연동</span>
     </div>
@@ -1141,7 +1144,7 @@
     }
 
     function cropSubjStrip_(sx, sy, sw, sh, scale) {
-      const sc = Math.min(scale || 1.6, 480 / Math.max(1, sw));
+      const sc = Math.min(scale || 1.6, 540 / Math.max(1, sw));
       const cw = Math.max(1, Math.round(sw * sc));
       const ch = Math.max(1, Math.round(sh * sc));
       const c = document.createElement("canvas");
@@ -1205,15 +1208,16 @@
           return;
         }
         if (sl.kind === "subj") {
-          const sx = Math.max(0, Math.round(sl.bx0 - 6)), sy = Math.max(0, Math.round(sl.by0 - 4));
-          const sw = Math.min(OMR_W - sx, Math.round(sl.bw + 52)), sh = Math.min(OMR_H - sy, Math.round(sl.bh + 8));
+          const px = Math.round(sl.bx0), py = Math.round(sl.by0), pw = Math.round(sl.bw), ph = Math.round(sl.bh);
+          const sx = Math.max(0, px - 2), sy = Math.max(0, py - 2);
+          const sw = Math.min(OMR_W - sx, pw + 14), sh = Math.min(OMR_H - sy, ph + 4);
           subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 1.4);
           subjPendingNos.push(it.n);
           pCtx.save(); pCtx.strokeStyle = "#6366f1"; pCtx.lineWidth = 2.5; pCtx.setLineDash([6, 4]);
-          pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
-          pCtx.fillStyle = "rgba(99,102,241,0.07)"; pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+          pCtx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
+          pCtx.fillStyle = "rgba(99,102,241,0.06)"; pCtx.fillRect(px + 1, py + 1, pw - 2, ph - 2);
           pCtx.setLineDash([]); pCtx.fillStyle = "#4f46e5"; pCtx.font = "800 11px sans-serif"; pCtx.textAlign = "right";
-          pCtx.fillText("✍️단답(넉넉형)", sx + sw - 6, sy + 14); pCtx.restore();
+          pCtx.fillText("✍️단답(넉넉형)", px + pw - 6, py + 14); pCtx.restore();
           return;
         }
         const iRad = sl.radius * 0.72;
@@ -1279,9 +1283,13 @@
       }
       const isSubj = it.t === "subj";
       if (isSubj) {
-        const sx = col === 0 ? 132 : 476;
-        const sw = col === 0 ? 276 : Math.min(OMR_W - sx, 324);
-        const halfH = Math.round(Math.max(20, spec.stepY * 0.70));
+        const px = OMR_COL_X[col][0] - 16;
+        const pw = (OMR_COL_X[col][4] + 22) - px;
+        const ph = Math.max(18, Math.round(spec.stepY - 8));
+        const py = Math.round(cy - ph / 2);
+        const sx = col === 0 ? 138 : 492;
+        const sw = col === 0 ? 250 : Math.min(OMR_W - sx, 278);
+        const halfH = Math.floor(spec.stepY * 0.49);
         const sy = Math.max(0, Math.round(cy - halfH));
         const sh = Math.min(OMR_H - sy, halfH * 2);
         subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 1.6);
@@ -1290,14 +1298,14 @@
         pCtx.strokeStyle = "#6366f1";
         pCtx.lineWidth = 2.5;
         pCtx.setLineDash([6, 4]);
-        pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
-        pCtx.fillStyle = "rgba(99,102,241,0.10)";
-        pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+        pCtx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
+        pCtx.fillStyle = "rgba(99,102,241,0.07)";
+        pCtx.fillRect(px + 1, py + 1, pw - 2, ph - 2);
         pCtx.setLineDash([]);
         pCtx.fillStyle = "#4f46e5";
-        pCtx.font = "800 11px sans-serif";
+        pCtx.font = "800 10.5px sans-serif";
         pCtx.textAlign = "right";
-        pCtx.fillText("✍️단답", sx + sw - 6, sy + 13);
+        pCtx.fillText("✍️단답", px + pw - 5, py + 12);
         pCtx.restore();
         continue;
       }
