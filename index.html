@@ -251,6 +251,7 @@
     sections: [],
     itemsBySec: {},
     results: [],
+    wrongSets: {},
     selStudentId: "",
     selSecKey: "2s_m_1",
     rangeFrom: 1,
@@ -438,6 +439,38 @@
       const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
       if (isOk) correct++; else wrong++;
       perItem.push({ n: it.n, t: it.t, cor: it.a, stu: stu, status: isOk ? "ok" : "bad" });
+    });
+    const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
+    return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
+  }
+
+  function getWrongSetVirtualItems_(setId) {
+    const ws = S.wrongSets && S.wrongSets[String(setId || "").trim().toUpperCase()];
+    if (!ws || !Array.isArray(ws.items)) return [];
+    return ws.items.map(function(mp, i) {
+      const secItems = S.itemsBySec[mp.s] || [];
+      const orig = secItems.find(function(x) { return Number(x.n) === Number(mp.n); }) || { n: mp.n, t: "mcq", a: "" };
+      const meta = getSecMeta_(mp.s);
+      return { n: i + 1, t: orig.t || "mcq", a: orig.a || "", origSecKey: mp.s, origQno: mp.n, origLbl: (meta.shortLbl || mp.s) + " " + mp.n };
+    });
+  }
+
+  function gradeWrongSetLocal_(setId, amap, rangesOrFrom, toNo) {
+    const items = getWrongSetVirtualItems_(setId);
+    const ranges = Array.isArray(rangesOrFrom)
+      ? rangesOrFrom
+      : ((rangesOrFrom && toNo) ? [[rangesOrFrom, toNo]] : null);
+    let rangeCount = 0, solved = 0, correct = 0, wrong = 0;
+    const perItem = [];
+    items.forEach(function(it) {
+      if (ranges && !isInRanges_(it.n, ranges)) return;
+      rangeCount++;
+      const stu = normAns_((amap || {})[String(it.n)], it.t);
+      if (!stu) { perItem.push({ n: it.n, t: it.t, cor: it.a, stu: "", status: "blank", origLbl: it.origLbl }); return; }
+      solved++;
+      const isOk = it.t === "subj" ? (stu === "O") : (stu === normAns_(it.a, it.t));
+      if (isOk) correct++; else wrong++;
+      perItem.push({ n: it.n, t: it.t, cor: it.a, stu: stu, status: isOk ? "ok" : "bad", origLbl: it.origLbl });
     });
     const acc = solved > 0 ? Math.round((correct / solved) * 1000) / 10 : 0;
     return { rangeCount: rangeCount, solved: solved, correct: correct, wrong: wrong, acc: acc, perItem: perItem };
@@ -657,7 +690,20 @@
     if (!rawStr || rawStr.indexOf("CMSOMR|") !== 0) return null;
     const parts = rawStr.split("|");
     if (parts.length < 6) return null;
+    if (parts[1] === "W") {
+      return {
+        isWrongRetest: true,
+        erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
+        isBlankCard: parts[2] === "BLANK",
+        setId: String(parts[3] || "").trim().toUpperCase(),
+        secKey: "__WRONG_SET__",
+        fromNo: Number(parts[4]) || 1,
+        toNo: Number(parts[5]) || 20,
+        layout: Number(parts[6]) || 30
+      };
+    }
     return {
+      isWrongRetest: false,
       erpId: parts[2] === "BLANK" ? "" : String(parts[2] || "").trim(),
       isBlankCard: parts[2] === "BLANK",
       secKey: String(parts[3] || "").trim(),
@@ -822,14 +868,19 @@
     let qrMeta = (warpedPack && warpedPack.qrMeta) || tryDecodeQrFromWarped_(warpedCanvas);
 
     const qrFound = Boolean(qrMeta);
-    const secKey = (qrMeta && qrMeta.secKey && S.itemsBySec[qrMeta.secKey]) ? qrMeta.secKey : S.selSecKey;
-    const secItemsAll = S.itemsBySec[secKey] || [];
+    const isWrongRetest = Boolean(qrMeta && qrMeta.isWrongRetest);
+    const wrongSetId = isWrongRetest ? String(qrMeta.setId || "").toUpperCase() : "";
+    const secKey = isWrongRetest
+      ? ("WR:" + wrongSetId)
+      : ((qrMeta && qrMeta.secKey && S.itemsBySec[qrMeta.secKey]) ? qrMeta.secKey : S.selSecKey);
+    const secItemsAll = isWrongRetest ? getWrongSetVirtualItems_(wrongSetId) : (S.itemsBySec[secKey] || []);
     const fromNo = qrMeta ? qrMeta.fromNo : (S.rangeFrom || 1);
     const toNo = qrMeta ? qrMeta.toNo : (S.rangeTo || secItemsAll.length || 20);
     // QR이 읽혔으면 QR 학생 ID만 사용(없으면 빈칸), QR 미인식 시 공용모드일 때만 기본 학생 사용
     const erpId = qrMeta
       ? (qrMeta.erpId || "")
       : (S.allowBlankQr ? S.selStudentId : "");
+    const missingWrongSet = Boolean(isWrongRetest && wrongSetId && !secItemsAll.length);
 
     const rangeItems = secItemsAll.filter(function(it) { return it.n >= fromNo && it.n <= toNo; });
     const count = rangeItems.length || Math.max(1, toNo - fromNo + 1);
@@ -954,6 +1005,11 @@
     return {
       qrFound: qrFound,
       isBlankCard: Boolean(qrMeta && qrMeta.isBlankCard),
+      isWrongRetest: isWrongRetest,
+      wrongSetId: wrongSetId,
+      missingWrongSet: missingWrongSet,
+      warpedCanvasRef: missingWrongSet ? warpedCanvas : null,
+      qrMetaRef: missingWrongSet ? qrMeta : null,
       erpId: erpId, secKey: secKey,
       fromNo: effFromNo, toNo: effToNo, ranges: ranges, rangeMarked: rangeMarked,
       answers: answers, warnCount: warnCount, previewUrl: thumb.toDataURL("image/jpeg", 0.78)
@@ -1216,22 +1272,48 @@
     showTopToast_("판독 완료: 성공 " + ok + "건" + (fail ? " · 미인식 " + fail + "건" : ""), ok ? "ok" : "warn");
   };
 
-  function onOmrParsed_(parsed, method) {
+  async function onOmrParsed_(parsed, method) {
+    // 방금 인쇄한 오답 세트가 로컬 캐시에 없을 경우 서버에서 온디맨드 자동 조회 후 즉시 채점!
+    if (parsed.missingWrongSet && parsed.wrongSetId && parsed.warpedCanvasRef && !parsed._retriedWrongSet) {
+      showTopToast_("🎯 오답 재채점 세트(" + parsed.wrongSetId + ") 조회 중...", "info");
+      try {
+        const u = S.apiUrl + (S.apiUrl.indexOf("?") >= 0 ? "&" : "?") + "api=naesinOmrWrongSet&tok=" + encodeURIComponent(S.tok) + "&setId=" + encodeURIComponent(parsed.wrongSetId) + "&seasonCode=" + encodeURIComponent(S.seasonCode);
+        const resp = await fetch(u, { redirect: "follow" });
+        const r = await resp.json();
+        if (r && r.success && r.set && r.set.id) {
+          S.wrongSets[r.set.id] = r.set;
+          const re = readWarpedOmrCanvas_({ canvas: parsed.warpedCanvasRef, qrMeta: parsed.qrMetaRef });
+          re._retriedWrongSet = true;
+          onOmrParsed_(re, method);
+          return;
+        }
+      } catch (_) {}
+      showTopToast_("오답 재채점 세트(" + parsed.wrongSetId + ")를 찾지 못했습니다.", "warn");
+      return;
+    }
+
+    const isWrongRetest = Boolean(parsed.isWrongRetest && parsed.wrongSetId);
     const qrMissing = !parsed.qrFound && !S.allowBlankQr;
     const isBlankCard = Boolean(parsed.isBlankCard);
     // 절대 QR 미인식 시 임의의 기본 학생으로 덮어쓰지 않음!
     const stu = qrMissing
       ? null
       : (parsed.erpId ? getStu_(parsed.erpId) : (S.allowBlankQr ? getStu_(S.selStudentId) : null));
-    const meta = getSecMeta_(parsed.secKey);
+    const meta = isWrongRetest
+      ? { key: "WR:" + parsed.wrongSetId, shortLbl: "오답재채점", title: "🎯 오답 재채점 [" + parsed.wrongSetId + "]" }
+      : getSecMeta_(parsed.secKey);
     const ranges = (Array.isArray(parsed.ranges) && parsed.ranges.length) ? parsed.ranges : [[parsed.fromNo, parsed.toNo]];
-    const graded = gradeLocal_(parsed.secKey, parsed.answers, ranges);
+    const graded = isWrongRetest
+      ? gradeWrongSetLocal_(parsed.wrongSetId, parsed.answers, ranges)
+      : gradeLocal_(parsed.secKey, parsed.answers, ranges);
     const item = {
       id: "D_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 5),
       erpId: stu ? stu.erpId : "",
       name: stu ? stu.name : (qrMissing ? "⚠️ QR 미인식 (학생·교재 선택)" : (isBlankCard ? "공용 OMR (학생 선택)" : ("⚠️ 미등록 ID(" + parsed.erpId + ")"))),
       school: stu ? stu.school : "",
       naesinBan: stu ? stu.naesinBan : "",
+      isWrongRetest: isWrongRetest,
+      wrongSetId: isWrongRetest ? parsed.wrongSetId : "",
       secKey: parsed.secKey, secTitle: meta.title,
       fromNo: ranges[0][0], toNo: ranges[ranges.length - 1][1],
       ranges: ranges,
@@ -1239,7 +1321,7 @@
       qrFound: Boolean(parsed.qrFound),
       qrMissing: qrMissing,
       answers: parsed.answers, graded: graded,
-      method: method, previewUrl: parsed.previewUrl || "",
+      method: isWrongRetest ? "직통오답OMR재채점" : method, previewUrl: parsed.previewUrl || "",
       warnCount: parsed.warnCount || 0, saved: false, saving: false,
       savedKey: null
     };
@@ -1255,6 +1337,9 @@
       if (qrMissing || !stu) {
         bn.style.background = "rgba(217, 119, 6, 0.94)";
         bn.innerHTML = '<span>⚠️ QR 미인식 · 자동저장 차단됨! 오른쪽에서 학생·교재 선택 후 저장하세요</span><span style="font-size:11px;">재스캔 가능</span>';
+      } else if (isWrongRetest) {
+        bn.style.background = "rgba(109, 40, 217, 0.95)";
+        bn.innerHTML = '<span>🎯 ' + esc_(item.name) + ' 오답 재채점 (' + esc_(formatRanges_(ranges)) + '번) · <strong>해결 ' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong></span><span style="font-size:11px; opacity:0.9;">오답해결 자동반영</span>';
       } else {
         bn.style.background = "rgba(5, 150, 105, 0.94)";
         bn.innerHTML = '<span>✓ ' + esc_(item.name) + ' · ' + esc_(meta.shortLbl) + ' (' + esc_(formatRanges_(ranges)) + '번) · <strong>' + graded.correct + '/' + graded.solved + ' (' + graded.acc + '%)</strong>' + (item.rangeMarked ? ' [구간체크]' : '') + '</span><span style="font-size:11px; opacity:0.9;">다음 종이를 비추세요</span>';
@@ -1284,6 +1369,30 @@
     const stu = getStu_(item.erpId);
     if (!stu) { showTopToast_("학생을 먼저 선택해주세요.", "warn"); return; }
     const ranges = (Array.isArray(item.ranges) && item.ranges.length) ? item.ranges : [[item.fromNo, item.toNo]];
+
+    // 🎯 오답노트 재채점 OMR 저장 경로
+    if (item.isWrongRetest && item.wrongSetId) {
+      item.saving = true;
+      renderRight_();
+      try {
+        const res = await postApi_({
+          api: "naesinOmrSaveWrongRetest", tok: S.tok, seasonCode: S.seasonCode, teacher: S.teacher,
+          setId: item.wrongSetId, erpId: stu.erpId, name: stu.name, school: stu.school, naesinBan: stu.naesinBan,
+          slotAnswers: filterAnsToRanges_(item.answers, ranges), ranges: ranges, method: item.method || "직통오답OMR재채점"
+        });
+        item.saving = false;
+        if (res && res.success) {
+          item.saved = true; item.qrMissing = false;
+          if (!silent) showTopToast_(res.message || ("🎯 " + stu.name + " 오답 재채점 반영 완료!"), "ok");
+        } else { showTopToast_("재채점 저장 실패: " + ((res && res.message) || "오류"), "warn"); }
+      } catch (err) {
+        item.saving = false;
+        showTopToast_("네트워크 오류: " + (err.message || err), "warn");
+      }
+      renderRight_();
+      return;
+    }
+
     const newKey = stu.erpId + "|" + item.secKey;
     // 이미 다른 학생·교재로 잘못 저장했던 항목을 수정 저장하는 경우 기존 잘못된 기록 자동 삭제 확인
     if (item.savedKey && item.savedKey !== newKey && !silent) {
@@ -1348,8 +1457,12 @@
   };
 
   window.saveAllUnsaved_ = async function() {
-    const list = S.queue.filter(function(q) { return !q.saved && getStu_(q.erpId); });
-    if (!list.length) { showTopToast_("학생이 지정된 미저장 건이 없습니다.", "warn"); return; }
+    const allList = S.queue.filter(function(q) { return !q.saved && getStu_(q.erpId); });
+    if (!allList.length) { showTopToast_("학생이 지정된 미저장 건이 없습니다.", "warn"); return; }
+    const wrList = allList.filter(function(q) { return q.isWrongRetest && q.wrongSetId; });
+    const list = allList.filter(function(q) { return !(q.isWrongRetest && q.wrongSetId); });
+    for (let i = 0; i < wrList.length; i++) await saveItem_(wrList[i].id, false);
+    if (!list.length) return;
     showTopToast_(list.length + "건 일괄 저장 중...", "info");
     try {
       const entries = list.map(function(it) {
@@ -1389,7 +1502,7 @@
   };
   window.resetAllRange_ = function(id) {
     const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
-    const maxN = (S.itemsBySec[q.secKey] || []).length || 20;
+    const maxN = (q.isWrongRetest ? getWrongSetVirtualItems_(q.wrongSetId).length : (S.itemsBySec[q.secKey] || []).length) || 20;
     q.ranges = [[1, maxN]]; q.fromNo = 1; q.toNo = maxN; q.markedOnly = false; q.saved = false;
     renderRight_();
   };
@@ -1411,7 +1524,7 @@
   };
   window.setQRangesText_ = function(id, txt) {
     const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
-    const maxN = (S.itemsBySec[q.secKey] || []).length || 999;
+    const maxN = (q.isWrongRetest ? getWrongSetVirtualItems_(q.wrongSetId).length : (S.itemsBySec[q.secKey] || []).length) || 999;
     const rgs = parseRangesText_(txt, maxN, q.fromNo, q.toNo);
     q.ranges = rgs;
     q.fromNo = rgs[0][0]; q.toNo = rgs[rgs.length - 1][1];
@@ -1420,7 +1533,8 @@
   window.markBlanksX_ = function(id) {
     const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
     const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
-    (S.itemsBySec[q.secKey] || []).forEach(function(it) { if (isInRanges_(it.n, rgs) && !q.answers[String(it.n)]) q.answers[String(it.n)] = "X"; });
+    const items = q.isWrongRetest ? getWrongSetVirtualItems_(q.wrongSetId) : (S.itemsBySec[q.secKey] || []);
+    items.forEach(function(it) { if (isInRanges_(it.n, rgs) && !q.answers[String(it.n)]) q.answers[String(it.n)] = "X"; });
     q.saved = false; renderRight_();
   };
   window.toggleAns_ = function(id, n, opt, qt) {
@@ -1523,14 +1637,14 @@
       h += '<div class="q-list">';
       S.queue.forEach(function(q) {
         const rgs = (Array.isArray(q.ranges) && q.ranges.length) ? q.ranges : [[q.fromNo, q.toNo]];
-        const g = gradeLocal_(q.secKey, q.answers, rgs);
+        const g = q.isWrongRetest ? gradeWrongSetLocal_(q.wrongSetId, q.answers, rgs) : gradeLocal_(q.secKey, q.answers, rgs);
         q.graded = g;
         h += '<div class="q-item ' + (act && act.id === q.id ? 'sel ' : '') + (q.saved ? 'saved' : 'unsaved') + '" onclick="selQ_(\'' + esc_(q.id) + '\')">' +
-          '<div><div style="font-size:13px; font-weight:800;">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
+          '<div><div style="font-size:13px; font-weight:800; color:' + (q.isWrongRetest ? '#c4b5fd' : '#f8fafc') + ';">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
           '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + esc_(formatRanges_(rgs)) + '번</div></div>' +
           '<div style="display:flex; align-items:center; gap:7px;">' +
-            '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
-            '<div style="font-size:10.5px; color:' + (q.qrMissing ? '#f87171' : (q.saved ? '#34d399' : '#fbbf24')) + ';">' + (q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (q.saved ? '✓ 출석부 저장됨' : '● 미저장'))) + '</div></div>' +
+            '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + (q.isWrongRetest ? '해결 ' : '') + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
+            '<div style="font-size:10.5px; color:' + (q.qrMissing ? '#f87171' : (q.saved ? '#34d399' : '#fbbf24')) + ';">' + (q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (q.saved ? (q.isWrongRetest ? '✓ 오답해결 반영' : '✓ 출석부 저장됨') : '● 미저장'))) + '</div></div>' +
             '<button type="button" class="btn sm" style="padding:4px 7px; background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.45); color:#fecaca;" title="저장된 기록 및 출석부 진도 삭제" onclick="event.stopPropagation(); deleteItem_(\'' + esc_(q.id) + '\')">🗑️</button>' +
           '</div>' +
         '</div>';
@@ -1540,24 +1654,24 @@
 
     if (act) {
       const actRgs = (Array.isArray(act.ranges) && act.ranges.length) ? act.ranges : [[act.fromNo, act.toNo]];
-      const g = gradeLocal_(act.secKey, act.answers, actRgs);
+      const g = act.isWrongRetest ? gradeWrongSetLocal_(act.wrongSetId, act.answers, actRgs) : gradeLocal_(act.secKey, act.answers, actRgs);
       const rngTxt = formatRanges_(actRgs);
-      const secMaxN = (S.itemsBySec[act.secKey] || []).length || act.toNo || 20;
+      const secMaxN = (act.isWrongRetest ? getWrongSetVirtualItems_(act.wrongSetId).length : (S.itemsBySec[act.secKey] || []).length) || act.toNo || 20;
       h += '<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line);">' +
-        (act.qrMissing ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(239,68,68,0.18); border:1px solid rgba(248,113,113,0.45); font-size:11.5px; font-weight:800; color:#fecaca;">⚠️ QR 코드가 읽히지 않아 오저장을 자동 차단했습니다. 아래에서 학생·교재를 직접 고른 뒤 [💾 저장]하거나 다시 스캔해 주세요.</div>' : '') +
+        (act.qrMissing ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(239,68,68,0.18); border:1px solid rgba(248,113,113,0.45); font-size:11.5px; font-weight:800; color:#fecaca;">⚠️ QR 코드가 읽히지 않아 오저장을 자동 차단했습니다. 아래에서 학생·교재를 직접 고른 뒤 [💾 저장]하거나 다시 스캔해 주세요.</div>' : (act.isWrongRetest ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(124,58,237,0.22); border:1px solid rgba(196,181,253,0.45); font-size:11.5px; font-weight:800; color:#ede9fe;">🎯 오답 재채점 모드 — 맞춘 문항은 원래 교재 파트에서 자동 해결되며, 남은 오답만 다음 오답노트에 포함됩니다.</div>' : '')) +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
           '<div><div style="font-size:13.5px; font-weight:900;">🔍 ' + esc_(act.name) + ' · ' + esc_(rngTxt) + '번</div>' +
-          '<div style="font-size:11.5px; color:#cbd5e1; margin-top:2px;">맞음 <strong style="color:#34d399;">' + g.correct + '</strong> · 틀림 <strong style="color:#f87171;">' + g.wrong + '</strong> · 정답률 <strong style="color:#38bdf8;">' + g.acc + '%</strong></div></div>' +
+          '<div style="font-size:11.5px; color:#cbd5e1; margin-top:2px;">' + (act.isWrongRetest ? '해결 ' : '맞음 ') + '<strong style="color:#34d399;">' + g.correct + '</strong> · ' + (act.isWrongRetest ? '재오답 ' : '틀림 ') + '<strong style="color:#f87171;">' + g.wrong + '</strong> · 정답률 <strong style="color:#38bdf8;">' + g.acc + '%</strong></div></div>' +
           '<div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;">' +
             '<select class="sel" style="height:28px; max-width:130px;" onchange="reassignStu_(\'' + esc_(act.id) + '\', this.value)">' +
               '<option value="">-- 학생 선택 --</option>' +
               S.students.map(function(s) { return '<option value="' + esc_(s.erpId) + '"' + (s.erpId === act.erpId ? ' selected' : '') + '>[' + esc_(s.naesinBan) + '] ' + esc_(s.name) + '</option>'; }).join("") +
             '</select>' +
-            '<select class="sel" style="height:28px; max-width:165px;" onchange="reassignSec_(\'' + esc_(act.id) + '\', this.value)">' +
+            (!act.isWrongRetest ? ('<select class="sel" style="height:28px; max-width:165px;" onchange="reassignSec_(\'' + esc_(act.id) + '\', this.value)">' +
               S.sections.map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === act.secKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
-            '</select>' +
-            '<button type="button" class="btn em sm" onclick="saveItem_(\'' + esc_(act.id) + '\', false)">💾 저장</button>' +
-            '<button type="button" class="btn sm" style="background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.5); color:#fecaca;" onclick="deleteItem_(\'' + esc_(act.id) + '\')">🗑️ 저장 삭제</button>' +
+            '</select>') : '') +
+            '<button type="button" class="btn em sm" onclick="saveItem_(\'' + esc_(act.id) + '\', false)">' + (act.isWrongRetest ? '💾 오답해결 반영' : '💾 저장') + '</button>' +
+            '<button type="button" class="btn sm" style="background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.5); color:#fecaca;" onclick="deleteItem_(\'' + esc_(act.id) + '\')">🗑️ 삭제</button>' +
           '</div>' +
         '</div>' +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; padding:7px 9px; border-radius:9px; background:rgba(124,58,237,0.16); border:1px solid rgba(167,139,250,0.35); margin-bottom:8px; font-size:11.5px; font-weight:800;">' +
@@ -1575,7 +1689,8 @@
         const corSet = pi.t === "subj" ? ["O"] : normAns_(pi.cor, pi.t).split(",");
         const stuSet = pi.stu ? pi.stu.split(",") : [];
         const opts = pi.t === "subj" ? ["O","△","X"] : ["1","2","3","4","5","X"];
-        let rh = '<div class="ans-row' + rCls + '"><span class="ans-no">' + pi.n + '.</span>';
+        let rh = '<div class="ans-row' + rCls + '"><span class="ans-no">' + pi.n + '.</span>' +
+          (pi.origLbl ? '<span style="font-size:9.5px; font-weight:700; color:#c4b5fd; max-width:52px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc_(pi.origLbl) + '">' + esc_(pi.origLbl) + '</span>' : '');
         opts.forEach(function(o) {
           const picked = stuSet.indexOf(o) !== -1, isCor = corSet.indexOf(o) !== -1;
           let cls = "bub";
@@ -1649,6 +1764,7 @@
       S.sections = res.sections || [];
       S.itemsBySec = res.itemsBySec || {};
       S.results = res.results || [];
+      S.wrongSets = res.wrongSets || {};
       if (!S.selStudentId && S.students.length) S.selStudentId = S.students[0].erpId;
       const sb = document.getElementById("seasonBadge");
       const sy = document.getElementById("syncBadge");
