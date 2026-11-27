@@ -1163,50 +1163,20 @@
         const sy = Math.max(0, Math.round(cy - halfH));
         const sh = Math.min(OMR_H - sy, halfH * 2);
         subjCrops[String(it.n)] = cropSubjStrip_(sx, sy, sw, sh, 2);
-
-        const pLumS = Math.max(75, (sampleLum_(OMR_COL_X[col][0] + 24, cy, 4) + sampleLum_(OMR_COL_X[col][2] + 24, cy, 4)) / 2);
-        const sSc = [];
-        for (let b = 0; b < 3; b++) sSc.push({ b: b, bx: OMR_COL_X[col][b], sc: measureDark_(OMR_COL_X[col][b], cy, innerRad, pLumS) });
-        const sSort = sSc.slice().sort(function(a, b) { return b.sc - a.sc; });
-        let outD = 0, outT = 0;
-        const outTh = Math.min(185, pLumS - 42), lx0 = OMR_COL_X[col][3] + 4, lx1 = OMR_COL_X[col][3] + 46;
-        const br2 = (spec.radius + 3.5) * (spec.radius + 3.5);
-        for (let y = sy + 3; y < sy + sh - 3; y += 2) {
-          const ro = y * OMR_W;
-          for (let x = sx + 4; x < sx + sw - 4; x += 2) {
-            let inB = false;
-            for (let b = 0; b < 3; b++) { const dx = x - OMR_COL_X[col][b], dy = y - cy; if (dx * dx + dy * dy <= br2) { inB = true; break; } }
-            if (inB || (x >= lx0 && x <= lx1 && Math.abs(y - cy) <= 9)) continue;
-            const p = (ro + x) * 4;
-            if (((fullImg[p] * 77 + fullImg[p + 1] * 150 + fullImg[p + 2] * 29) >> 8) < outTh) outD++;
-            outT++;
-          }
-        }
-        const isCleanBub = (sSort[0].sc >= 0.45 && (sSort[0].sc - sSort[1].sc) >= 0.22 && (outT ? outD / outT : 0) < 0.032);
-        if (isCleanBub) {
-          const lv = ["O", "△", "X"][sSort[0].b] || "X";
-          answers[String(it.n)] = lv;
-          pCtx.beginPath();
-          pCtx.arc(sSort[0].bx, cy, spec.radius + 3, 0, Math.PI * 2);
-          pCtx.strokeStyle = lv === "O" ? "#10b981" : "#ef4444";
-          pCtx.lineWidth = 3.5;
-          pCtx.stroke();
-        } else {
-          subjPendingNos.push(it.n);
-          pCtx.save();
-          pCtx.strokeStyle = "#6366f1";
-          pCtx.lineWidth = 2.5;
-          pCtx.setLineDash([6, 4]);
-          pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
-          pCtx.fillStyle = "rgba(99,102,241,0.10)";
-          pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
-          pCtx.setLineDash([]);
-          pCtx.fillStyle = "#4f46e5";
-          pCtx.font = "800 11px sans-serif";
-          pCtx.textAlign = "right";
-          pCtx.fillText("✍️단답", sx + sw - 6, sy + 13);
-          pCtx.restore();
-        }
+        subjPendingNos.push(it.n);
+        pCtx.save();
+        pCtx.strokeStyle = "#6366f1";
+        pCtx.lineWidth = 2.5;
+        pCtx.setLineDash([6, 4]);
+        pCtx.strokeRect(sx + 2, sy + 2, sw - 4, sh - 4);
+        pCtx.fillStyle = "rgba(99,102,241,0.10)";
+        pCtx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+        pCtx.setLineDash([]);
+        pCtx.fillStyle = "#4f46e5";
+        pCtx.font = "800 11px sans-serif";
+        pCtx.textAlign = "right";
+        pCtx.fillText("✍️단답", sx + sw - 6, sy + 13);
+        pCtx.restore();
         continue;
       }
       const optCnt = 5;
@@ -2197,7 +2167,6 @@
             const picked = pi.stu === o;
             let cls = "bub";
             if (picked) cls += " picked " + (o === "O" ? "ok" : "bad");
-            if (o === "O" && !picked) cls += " ans-hint";
             rh += '<button type="button" class="' + cls + '" onclick="toggleAns_(\'' + esc_(act.id) + '\',' + pi.n + ',\'' + o + '\',\'subj\')">' + o + '</button>';
           });
           rh += '</span></div>';
