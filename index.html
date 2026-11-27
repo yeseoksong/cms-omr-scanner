@@ -184,9 +184,11 @@
     .q-item.unsaved { border-left: 4px solid var(--amber); }
 
     .ans-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
-      gap: 6px; max-height: 320px; overflow-y: auto; margin-top: 8px;
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 8px; max-height: 360px; overflow-y: auto; margin-top: 8px; align-items: start;
     }
+    @media (max-width: 520px) { .ans-grid { grid-template-columns: 1fr; } }
+    .ans-col { display: flex; flex-direction: column; gap: 5px; }
     .ans-row {
       display: flex; align-items: center; gap: 4px; padding: 5px 7px;
       border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid var(--line);
@@ -316,9 +318,14 @@
     } catch (_) {}
   }
 
-  function getOmrGridSpec_(count) {
-    const is50 = count > 30;
-    return { is50: is50, perCol: is50 ? 25 : 15, startY: is50 ? 248 : 268, stepY: is50 ? 32 : 50, radius: is50 ? 11.5 : 15 };
+  function getOmrGridSpec_(countOrLayout) {
+    if (countOrLayout > 50) {
+      return { layout: 70, is70: true, is50: true, perCol: 35, startY: 240, stepY: 23.5, radius: 9.0 };
+    }
+    if (countOrLayout > 30) {
+      return { layout: 50, is70: false, is50: true, perCol: 25, startY: 248, stepY: 32, radius: 11.5 };
+    }
+    return { layout: 30, is70: false, is50: false, perCol: 15, startY: 268, stepY: 50, radius: 15 };
   }
 
   function getSecMeta_(k) {
@@ -333,14 +340,25 @@
   function buildRangesFromCheckedNos_(checkedNos, cardFrom, cardTo) {
     if (!checkedNos || !checkedNos.length) return [[cardFrom, cardTo]];
     const sorted = checkedNos.slice().sort(function(a, b) { return a - b; });
-    if (sorted.length === 1) {
-      return sorted[0] > cardFrom ? [[cardFrom, sorted[0]]] : [[cardFrom, cardTo]];
-    }
     const out = [];
     for (let i = 0; i < sorted.length; i += 2) {
       if (i + 1 < sorted.length) out.push([sorted[i], sorted[i + 1]]);
       else out.push([sorted[i], cardTo]);
     }
+    return out;
+  }
+
+  function buildRunsFromNos_(nos) {
+    if (!nos || !nos.length) return [];
+    const sorted = nos.slice().sort(function(a, b) { return a - b; });
+    const out = [];
+    let s = sorted[0], prev = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] === prev) continue;
+      if (sorted[i] === prev + 1) { prev = sorted[i]; }
+      else { out.push([s, prev]); s = prev = sorted[i]; }
+    }
+    out.push([s, prev]);
     return out;
   }
 
@@ -351,11 +369,19 @@
     const parts = s.split(/[,;/]+/).map(function(x) { return x.trim(); }).filter(Boolean);
     const out = [];
     parts.forEach(function(part) {
-      const m = part.match(/^(\d+)\s*[-~]\s*(\d+)$/);
-      if (m) {
-        const a = Math.max(1, Math.min(cap, Number(m[1])));
-        const b = Math.max(a, Math.min(cap, Number(m[2])));
+      const mBoth = part.match(/^(\d+)\s*[-~]\s*(\d+)$/);
+      const mOpenEnd = part.match(/^(\d+)\s*[-~]\s*$/);
+      const mOpenStart = part.match(/^[-~]\s*(\d+)$/);
+      if (mBoth) {
+        const a = Math.max(1, Math.min(cap, Number(mBoth[1])));
+        const b = Math.max(a, Math.min(cap, Number(mBoth[2])));
         out.push([a, b]);
+      } else if (mOpenEnd) {
+        const a = Math.max(1, Math.min(cap, Number(mOpenEnd[1])));
+        out.push([a, cap]);
+      } else if (mOpenStart) {
+        const b = Math.max(1, Math.min(cap, Number(mOpenStart[1])));
+        out.push([1, b]);
       } else if (/^\d+$/.test(part)) {
         const n = Math.max(1, Math.min(cap, Number(part)));
         out.push([n, n]);
@@ -807,7 +833,7 @@
 
     const rangeItems = secItemsAll.filter(function(it) { return it.n >= fromNo && it.n <= toNo; });
     const count = rangeItems.length || Math.max(1, toNo - fromNo + 1);
-    const spec = getOmrGridSpec_(qrMeta && qrMeta.layout === 50 ? 50 : count);
+    const spec = getOmrGridSpec_(qrMeta && qrMeta.layout ? qrMeta.layout : count);
     const fullImg = ctx.getImageData(0, 0, OMR_W, OMR_H).data;
 
     function sampleLum_(cx, cy, rad) {
@@ -854,8 +880,8 @@
     pCtx.drawImage(warpedCanvas, 0, 0);
 
     const totalSlots = Math.min(spec.perCol * 2, rangeItems.length);
-    // [□ 구간] 다중 구간 체크박스 판독 (예: 11·20 → 11~20번 / 11·20·25·34 → 11~20번, 25~34번)
-    const rangeRad = spec.is50 ? 5.2 : 6.8;
+    // [□ 구간] 다중 구간 체크박스 판독 (예: 1·24·30·35·47 → 1~24, 30~35, 47~끝까지!)
+    const rangeRad = spec.is70 ? 4.4 : (spec.is50 ? 5.2 : 6.8);
     const rangeSamples = [];
     for (let idx = 0; idx < totalSlots; idx++) {
       const it = rangeItems[idx], col = idx < spec.perCol ? 0 : 1, row = idx % spec.perCol;
@@ -866,14 +892,14 @@
     const rSorted = rangeSamples.map(function(x) { return x.sc; }).sort(function(a, b) { return a - b; });
     const rBase = rSorted.length ? rSorted[Math.floor(rSorted.length * 0.25)] : 0;
     const rangeChecked = rangeSamples.filter(function(s) { return (s.sc - rBase) >= 0.22 && s.sc >= 0.30; });
-    const rangeMarked = rangeChecked.length >= 2 || (rangeChecked.length === 1 && rangeItems.length > 1 && rangeChecked[0].n > rangeItems[0].n);
+    const rangeMarked = rangeChecked.length >= 1;
     const ranges = rangeMarked
       ? buildRangesFromCheckedNos_(rangeChecked.map(function(r) { return r.n; }), fromNo, toNo)
       : [[fromNo, toNo]];
     const effFromNo = ranges[0][0];
     const effToNo = ranges[ranges.length - 1][1];
     if (rangeMarked) {
-      const bh = spec.is50 ? 9 : 11;
+      const bh = spec.is70 ? 7.5 : (spec.is50 ? 9 : 11);
       rangeChecked.forEach(function(rc) { pCtx.strokeStyle = "#7c3aed"; pCtx.lineWidth = 3.5; pCtx.strokeRect(rc.rx - bh, rc.cy - bh, bh * 2, bh * 2); });
     }
 
@@ -1345,7 +1371,28 @@
   };
 
   window.selQ_ = function(id) { S.activeId = id; renderRight_(); };
-  window.clearQ_ = function() { S.queue = []; S.activeId = ""; renderRight_(); };
+  window.clearQ_ = function() {
+    const savedCnt = S.queue.filter(function(q) { return q.saved || q.savedKey; }).length;
+    if (savedCnt) {
+      if (!window.confirm("채점함 화면 목록만 비웁니다. (이미 출석부에 저장된 " + savedCnt + "건은 유지됩니다)\n\n※ 저장된 성적 자체를 지우려면 각 항목 옆 [🗑️] 삭제 버튼을 눌러주세요.\n목록만 비우시겠습니까?")) return;
+    }
+    S.queue = []; S.activeId = ""; renderRight_();
+  };
+  window.snapMarkedOnly_ = function(id) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
+    const nos = Object.keys(q.answers || {}).filter(function(k) { return Boolean(q.answers[k]); }).map(Number).filter(Number.isFinite);
+    if (!nos.length) { showTopToast_("마킹된 문항이 없습니다.", "warn"); return; }
+    const runs = buildRunsFromNos_(nos);
+    q.ranges = runs; q.fromNo = runs[0][0]; q.toNo = runs[runs.length - 1][1]; q.markedOnly = true; q.saved = false;
+    showTopToast_("마킹된 " + nos.length + "문항만 표시합니다 (" + formatRanges_(runs) + "번)", "ok");
+    renderRight_();
+  };
+  window.resetAllRange_ = function(id) {
+    const q = S.queue.find(function(x) { return x.id === id; }); if (!q) return;
+    const maxN = (S.itemsBySec[q.secKey] || []).length || 20;
+    q.ranges = [[1, maxN]]; q.fromNo = 1; q.toNo = maxN; q.markedOnly = false; q.saved = false;
+    renderRight_();
+  };
   window.reassignStu_ = function(id, eid) {
     const q = S.queue.find(function(x) { return x.id === id; }), st = getStu_(eid);
     if (q && st) { q.erpId = st.erpId; q.name = st.name; q.school = st.school; q.naesinBan = st.naesinBan; q.qrMissing = false; q.saved = false; renderRight_(); }
@@ -1451,20 +1498,22 @@
   window.S_SET_SEC_ = function(sk) {
     S.selSecKey = sk;
     const n = (S.itemsBySec[sk] || []).length || 20;
-    S.rangeFrom = 1; S.rangeTo = Math.min(n, 50);
+    S.rangeFrom = 1; S.rangeTo = Math.min(n, 70);
     renderMain_();
   };
 
   function renderRight_() {
     const host = document.getElementById("rightPanel");
     if (!host) return;
+    const prevGrid = host.querySelector(".ans-grid");
+    const prevScroll = prevGrid ? prevGrid.scrollTop : 0;
     const act = S.queue.find(function(q) { return q.id === S.activeId; }) || S.queue[0] || null;
     const unsaved = S.queue.filter(function(q) { return !q.saved; }).length;
     let h = '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">' +
       '<div style="font-size:14px; font-weight:900;">⚡ 스캔 채점함 (' + S.queue.length + '건)</div>' +
       '<div style="display:flex; gap:5px;">' +
         (unsaved ? '<button type="button" class="btn em sm" onclick="saveAllUnsaved_()">💾 미저장 ' + unsaved + '건 일괄저장</button>' : '') +
-        (S.queue.length ? '<button type="button" class="btn sm" onclick="clearQ_()">비우기</button>' : '') +
+        (S.queue.length ? '<button type="button" class="btn sm" onclick="clearQ_()">목록 비우기</button>' : '') +
       '</div>' +
     '</div>';
 
@@ -1479,8 +1528,11 @@
         h += '<div class="q-item ' + (act && act.id === q.id ? 'sel ' : '') + (q.saved ? 'saved' : 'unsaved') + '" onclick="selQ_(\'' + esc_(q.id) + '\')">' +
           '<div><div style="font-size:13px; font-weight:800;">' + esc_(q.name) + ' <span style="font-size:11px; color:#94a3b8;">' + esc_(q.naesinBan) + '</span></div>' +
           '<div style="font-size:11px; color:#94a3b8;">' + esc_(q.secTitle) + ' · ' + esc_(formatRanges_(rgs)) + '번</div></div>' +
-          '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
-          '<div style="font-size:10.5px; color:' + (q.qrMissing ? '#f87171' : (q.saved ? '#34d399' : '#fbbf24')) + ';">' + (q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (q.saved ? '✓ 출석부 저장됨' : '● 미저장'))) + '</div></div>' +
+          '<div style="display:flex; align-items:center; gap:7px;">' +
+            '<div style="text-align:right;"><div style="font-size:13.5px; font-weight:900; color:' + (g.acc >= 80 ? '#34d399' : '#fbbf24') + ';">' + g.correct + '/' + g.solved + ' (' + g.acc + '%)</div>' +
+            '<div style="font-size:10.5px; color:' + (q.qrMissing ? '#f87171' : (q.saved ? '#34d399' : '#fbbf24')) + ';">' + (q.saving ? '☁️ 저장 중...' : (q.qrMissing ? '⚠️ QR미인식·미저장' : (q.saved ? '✓ 출석부 저장됨' : '● 미저장'))) + '</div></div>' +
+            '<button type="button" class="btn sm" style="padding:4px 7px; background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.45); color:#fecaca;" title="저장된 기록 및 출석부 진도 삭제" onclick="event.stopPropagation(); deleteItem_(\'' + esc_(q.id) + '\')">🗑️</button>' +
+          '</div>' +
         '</div>';
       });
       h += '</div>';
@@ -1490,6 +1542,7 @@
       const actRgs = (Array.isArray(act.ranges) && act.ranges.length) ? act.ranges : [[act.fromNo, act.toNo]];
       const g = gradeLocal_(act.secKey, act.answers, actRgs);
       const rngTxt = formatRanges_(actRgs);
+      const secMaxN = (S.itemsBySec[act.secKey] || []).length || act.toNo || 20;
       h += '<div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line);">' +
         (act.qrMissing ? '<div style="margin-bottom:8px; padding:8px 10px; border-radius:9px; background:rgba(239,68,68,0.18); border:1px solid rgba(248,113,113,0.45); font-size:11.5px; font-weight:800; color:#fecaca;">⚠️ QR 코드가 읽히지 않아 오저장을 자동 차단했습니다. 아래에서 학생·교재를 직접 고른 뒤 [💾 저장]하거나 다시 스캔해 주세요.</div>' : '') +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
@@ -1504,33 +1557,46 @@
               S.sections.map(function(sec) { return '<option value="' + esc_(sec.key) + '"' + (sec.key === act.secKey ? ' selected' : '') + '>' + esc_(sec.title) + '</option>'; }).join("") +
             '</select>' +
             '<button type="button" class="btn em sm" onclick="saveItem_(\'' + esc_(act.id) + '\', false)">💾 저장</button>' +
-            '<button type="button" class="btn sm" style="background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.5); color:#fecaca;" onclick="deleteItem_(\'' + esc_(act.id) + '\')">🗑️ 삭제</button>' +
+            '<button type="button" class="btn sm" style="background:rgba(220,38,38,0.28); border-color:rgba(248,113,113,0.5); color:#fecaca;" onclick="deleteItem_(\'' + esc_(act.id) + '\')">🗑️ 저장 삭제</button>' +
           '</div>' +
         '</div>' +
         '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; padding:7px 9px; border-radius:9px; background:rgba(124,58,237,0.16); border:1px solid rgba(167,139,250,0.35); margin-bottom:8px; font-size:11.5px; font-weight:800;">' +
-          '<span style="display:inline-flex; align-items:center; gap:5px; flex-wrap:wrap;">🎯 채점 구간: <input type="text" class="rng-inp" style="width:136px; text-align:left; padding:0 7px;" value="' + esc_(rngTxt) + '" placeholder="예: 11-20, 25-34" onchange="setQRangesText_(\'' + esc_(act.id) + '\', this.value)">' + (act.rangeMarked ? '<span style="color:#c4b5fd; font-size:10.5px;">✓ 구간체크</span>' : '') + '</span>' +
-          '<button type="button" class="btn sm" style="background:rgba(239,68,68,0.22); border-color:rgba(248,113,113,0.45);" onclick="markBlanksX_(\'' + esc_(act.id) + '\')">빈칸→오답(X)</button>' +
+          '<span style="display:inline-flex; align-items:center; gap:5px; flex-wrap:wrap;">🎯 구간: <input type="text" class="rng-inp" style="width:142px; text-align:left; padding:0 7px;" value="' + esc_(rngTxt) + '" placeholder="예: 1~24, 30~35, 47~" onchange="setQRangesText_(\'' + esc_(act.id) + '\', this.value)">' + (act.rangeMarked ? '<span style="color:#c4b5fd; font-size:10.5px;">✓ 구간체크</span>' : '') + '</span>' +
+          '<div style="display:flex; gap:4px; flex-wrap:wrap;">' +
+            '<button type="button" class="btn pri sm" onclick="snapMarkedOnly_(\'' + esc_(act.id) + '\')">✨ 마킹만 보기</button>' +
+            '<button type="button" class="btn sm" onclick="resetAllRange_(\'' + esc_(act.id) + '\')">전체(1~' + secMaxN + ')</button>' +
+            '<button type="button" class="btn sm" style="background:rgba(239,68,68,0.22); border-color:rgba(248,113,113,0.45);" onclick="markBlanksX_(\'' + esc_(act.id) + '\')">빈칸→X</button>' +
+          '</div>' +
         '</div>' +
-        (act.previewUrl ? '<details style="margin-bottom:8px;"><summary style="cursor:pointer; font-size:11.5px; font-weight:800; color:#7dd3fc;">🖼️ 원근보정 OMR 오버레이 보기</summary><img src="' + act.previewUrl + '" style="width:100%; max-width:280px; border-radius:8px; margin-top:6px; display:block;"></details>' : '') +
-        '<div class="ans-grid">';
-      g.perItem.forEach(function(pi) {
+        (act.previewUrl ? '<details style="margin-bottom:8px;"><summary style="cursor:pointer; font-size:11.5px; font-weight:800; color:#7dd3fc;">🖼️ 원근보정 OMR 오버레이 보기</summary><img src="' + act.previewUrl + '" style="width:100%; max-width:280px; border-radius:8px; margin-top:6px; display:block;"></details>' : '');
+
+      const renderRow_ = function(pi) {
         const rCls = pi.status === "ok" ? " ok" : (pi.status === "bad" ? " bad" : "");
         const corSet = pi.t === "subj" ? ["O"] : normAns_(pi.cor, pi.t).split(",");
         const stuSet = pi.stu ? pi.stu.split(",") : [];
         const opts = pi.t === "subj" ? ["O","△","X"] : ["1","2","3","4","5","X"];
-        h += '<div class="ans-row' + rCls + '"><span class="ans-no">' + pi.n + '.</span>';
+        let rh = '<div class="ans-row' + rCls + '"><span class="ans-no">' + pi.n + '.</span>';
         opts.forEach(function(o) {
           const picked = stuSet.indexOf(o) !== -1, isCor = corSet.indexOf(o) !== -1;
           let cls = "bub";
           if (picked) cls += " picked " + (pi.status === "ok" ? "ok" : "bad");
           if (isCor && !picked) cls += " ans-hint";
-          h += '<button type="button" class="' + cls + '" onclick="toggleAns_(\'' + esc_(act.id) + '\',' + pi.n + ',\'' + o + '\',\'' + pi.t + '\')">' + o + '</button>';
+          rh += '<button type="button" class="' + cls + '" onclick="toggleAns_(\'' + esc_(act.id) + '\',' + pi.n + ',\'' + o + '\',\'' + pi.t + '\')">' + o + '</button>';
         });
-        h += '</div>';
-      });
-      h += '</div></div>';
+        rh += '</div>';
+        return rh;
+      };
+      const mid = Math.ceil(g.perItem.length / 2);
+      h += '<div class="ans-grid">' +
+        '<div class="ans-col">' + g.perItem.slice(0, mid).map(renderRow_).join("") + '</div>' +
+        (g.perItem.length > mid ? ('<div class="ans-col">' + g.perItem.slice(mid).map(renderRow_).join("") + '</div>') : '') +
+      '</div></div>';
     }
     host.innerHTML = h;
+    if (prevScroll > 0) {
+      const ng = host.querySelector(".ans-grid");
+      if (ng) ng.scrollTop = prevScroll;
+    }
   }
 
   function showLockedScreen_(msg) {
